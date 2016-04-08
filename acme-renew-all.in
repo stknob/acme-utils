@@ -146,7 +146,7 @@ do
 			continue
 		}
 
-		ISSUER_RESPONSE="$(${WGET} "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
+		ISSUER_RESPONSE="$(${WGET} -q "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
 		[[ -n "${ISSUER_RESPONSE}" ]] || {
 			echo "Failed to renew certificate chain certificate from '${ISSUER_URL}'" >&2
 			(( FAILED++ ))
