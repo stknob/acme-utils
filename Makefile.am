@@ -29,17 +29,17 @@ do_subst = sed  -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
 		-e 's,[@]SETFACL[@],$(SETFACL),g' \
 		-e 's,[@]OPENSSL[@],$(OPENSSL),g'
 
-acme.conf: acme.conf.in
+acme.conf: acme.conf.in Makefile
 	$(do_subst) < $(srcdir)/acme.conf.in > acme.conf
 
-acme-renew-single: acme-renew-single.in
+acme-renew-single: acme-renew-single.in Makefile
 	$(do_subst) < $(srcdir)/acme-renew-single.in > acme-renew-single
 	chmod +x acme-renew-single
 
-acme-renew-all: acme-renew-all.in
+acme-renew-all: acme-renew-all.in Makefile
 	$(do_subst) < $(srcdir)/acme-renew-all.in > acme-renew-all
 	chmod +x acme-renew-all
 
-acme-setup-cert: acme-setup-cert.in
+acme-setup-cert: acme-setup-cert.in Makefile
 	$(do_subst) < $(srcdir)/acme-setup-cert.in > acme-setup-cert
 	chmod +x acme-setup-cert
