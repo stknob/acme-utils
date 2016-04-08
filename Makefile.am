@@ -13,7 +13,7 @@ CLEANFILES = \
 	acme.conf
 
 pkgdata_DATA = \
-	acme_tiny.py
+	acme-tiny/acme_tiny.py
 
 sysconf_DATA = \
 	acme.conf
