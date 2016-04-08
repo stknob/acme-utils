@@ -10,8 +10,8 @@ WGET="@WGET@"
 DIG="@DIG@"
 
 # Dedicated user and group for fetch/renew operations
-ACME_USER="letsencrypt"
-ACME_GROUP="letsencrypt"
+ACME_USER="acme"
+ACME_GROUP="acme"
 
 # Location of issuer cert
 ACME_ISSUER_CERT="https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem"
