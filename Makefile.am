@@ -26,6 +26,7 @@ do_subst = sed  -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
 		-e 's,[@]WGET[@],$(WGET),g' \
 		-e 's,[@]PWGEN[@],$(PWGEN),g' \
 		-e 's,[@]PYTHON[@],$(PYTHON),g' \
+		-e 's,[@]SETFACL[@],$(SETFACL),g' \
 		-e 's,[@]OPENSSL[@],$(OPENSSL),g'
 
 acme.conf: acme.conf.in

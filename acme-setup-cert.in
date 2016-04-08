@@ -430,7 +430,7 @@ then
 	#
 	# Use ACLs to give letsencrypt user account access to certificate files
 	#
-	setfacl -m "user:${ACME_USER}:r" "${CERT_DIR}/${CERT_NAME}.csr" || {
+	${SETFACL} -m "user:${ACME_USER}:r" "${CERT_DIR}/${CERT_NAME}.csr" || {
 		echo "Failed to give ${ACME_USER} read permission on sign request" >&2
 		exit 1
 	}
@@ -476,7 +476,7 @@ then
 		exit 1
 	}
 
-	setfacl -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.crt" || {
+	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.crt" || {
 		echo "Failed to give ${ACME_USER} read/write permission on certificate" >&2
 		exit 1
 	}
@@ -487,7 +487,7 @@ then
 		exit 1
 	}
 
-	setfacl -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
+	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
 		echo "Failed to give ${ACME_USER} read/write permission on chain file" >&2
 		exit 1
 	}

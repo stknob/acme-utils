@@ -43,6 +43,9 @@ AS_IF([test "x${PWGEN}" = "x"], [AC_MSG_ERROR([pwgen not found])])
 AC_PATH_PROG([DIG], [dig])
 AS_IF([test "x${DIG}" = "x"], [AC_MSG_ERROR([dig not found])])
 
+AC_PATH_PROG([SETFACL], [setfacl])
+AS_IF([test "x${SETFACL}" = "x"], [AC_MSG_ERROR([setfacl not found])])
+
 # Generate output files
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
