@@ -88,7 +88,7 @@ done <<<"${FILES}"
 	exit 1
 }
 
-while read fn
+for fn in ${CERTIFICATES[@]}
 do
 	CERT_NAME="${fn}"
 	[[ -f "${CERT_DIR}/${CERT_NAME}" ]] || {
@@ -154,7 +154,7 @@ do
 	fi
 
 	(( UPDATED++ ))
-done <<<"${CERTIFICATES[@]}"
+done
 
 echo "Found: ${#CERTIFICATES[@]}, Updated: ${UPDATED}, Skipped: ${SKIPPED}, Failed: ${FAILED}" >&2
 
