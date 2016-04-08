@@ -83,7 +83,13 @@ ${OPENSSL} x509 -in "${CERT_DIR}/${CERT_NAME}.ca-bundle" \
 if [[ $? -gt 0 ]] || [[ "${ISSUER_CUR}" != "${ISSUER_NEW}" ]]
 then
 	echo "Renewing issuer chain certificate..." >&2
-	ISSUER_RESPONSE="$(${WGET} "${ACME_ISSUER_CERT}" -O - 2>/dev/null)"
+	ISSUER_URL="$(${OPENSSL} x509 -noout -text -in "${CERT_DIR}/${CERT_NAME}.crt" | sed -ne '/CA Issuers - URI:/{s/.*\(https\?:.\+\)$/\1/;p;}')"
+	[[ -n "${ISSUER_URL}" ]] || {
+		echo "Failed to extract issuer cert URL from certificate" >&2
+		exit 1
+	}
+
+	ISSUER_RESPONSE="$(${WGET} "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
 	[[ -n "${ISSUER_RESPONSE}" ]] || {
 		echo "Failed to renew certificate chain certificate from '${ISSUER_URL}'" >&2
 		exit 1

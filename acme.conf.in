@@ -13,9 +13,6 @@ DIG="@DIG@"
 ACME_USER="acme"
 ACME_GROUP="acme"
 
-# Location of issuer cert
-ACME_ISSUER_CERT="https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem"
-
 # Locations
 ACME_DIR="@sysconfdir@"
 CERT_DIR="@certdir@"
