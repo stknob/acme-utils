@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.61])
 AC_INIT([acme-utils], [0.0.1], [s.knoblich@axsentis.de])
-AC_CONFIG_SRCDIR([acme-setup-cert])
+AC_CONFIG_SRCDIR([acme-setup-cert.in])
 AC_CONFIG_MACRO_DIR([m4])
 
 # override default
