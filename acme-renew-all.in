@@ -139,8 +139,7 @@ do
 	if [[ $? -gt 0 ]] || [[ "${ISSUER_CUR}" != "${ISSUER_NEW}" ]]
 	then
 		echo "Renewing issuer chain certificate..." >&2
-		ISSUER_URL="https://letsencrypt.org/certs/lets-encrypt-x1-cross-signed.pem"
-		ISSUER_RESPONSE="$(${WGET} "${ISSUER_URL}" -O - 2>/dev/null)"
+		ISSUER_RESPONSE="$(${WGET} "${ACME_ISSUER_CERT}" -O - 2>/dev/null)"
 		[[ -n "${ISSUER_RESPONSE}" ]] || {
 			echo "Failed to renew certificate chain certificate from '${ISSUER_URL}'" >&2
 			(( FAILED++ ))
