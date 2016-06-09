@@ -45,15 +45,16 @@ done
 	exit 1
 }
 
-CERT_NAME="${1}"
-[[ -f "${CERT_DIR}/${CERT_NAME}.crt" ]] || {
-	echo "Domain certificate '${CERT_NAME}.crt' not found" >&2
+CERT_NAME="${1}.crt"
+CERT_BASE="${CERT_NAME%.*}"
+[[ -f "${CERT_DIR}/${CERT_NAME}" ]] || {
+	echo "Domain certificate '${CERT_NAME}' not found" >&2
 	exit 1
 }
 
 echo "Renewing '${CERT_NAME}' certificate..." >&2
 CERT_RESPONSE="$(${PYTHON} "@pkgdatadir@/acme_tiny.py" \
-	--csr "${CERT_DIR}/${CERT_NAME}.csr" \
+	--csr "${CERT_DIR}/${CERT_BASE}.csr" \
 	--account-key "${ACCOUNT_KEY}" \
 	--acme-dir "${CHALLENGE_DIR}")"
 
@@ -67,23 +68,23 @@ CERT_RESPONSE="$(${PYTHON} "@pkgdatadir@/acme_tiny.py" \
 	exit 1
 }
 
-cat ->"${CERT_DIR}/${CERT_NAME}.crt" <<<"${CERT_RESPONSE}" || {
+cat ->"${CERT_DIR}/${CERT_NAME}" <<<"${CERT_RESPONSE}" || {
 	echo "Failed to renew certificate (update failed)" >&2
 	exit 1
 }
 
 # Get old and new issuer name for the ca-bundle fetching
-ISSUER_CUR="$(${OPENSSL} x509 -noout -subject_hash -in "${CERT_DIR}/${CERT_NAME}.ca-bundle")"
-ISSUER_NEW="$(${OPENSSL} x509 -noout -issuer_hash  -in "${CERT_DIR}/${CERT_NAME}.crt")"
+ISSUER_CUR="$(${OPENSSL} x509 -noout -subject_hash -in "${CERT_DIR}/${CERT_BASE}.ca-bundle")"
+ISSUER_NEW="$(${OPENSSL} x509 -noout -issuer_hash  -in "${CERT_DIR}/${CERT_NAME}")"
 
 # Check if issuer cert expires
-${OPENSSL} x509 -in "${CERT_DIR}/${CERT_NAME}.ca-bundle" \
+${OPENSSL} x509 -in "${CERT_DIR}/${CERT_BASE}.ca-bundle" \
 	-checkend $(( MIN_EXPIRE_DAYS * 86400 )) \
 	>/dev/null
 if [[ $? -gt 0 || "${ISSUER_CUR}" != "${ISSUER_NEW}" ]]
 then
 	echo "Renewing issuer chain certificate..." >&2
-	ISSUER_URL="$(${OPENSSL} x509 -noout -text -in "${CERT_DIR}/${CERT_NAME}.crt" | sed -ne '/CA Issuers - URI:/{s/.*\(https\?:.\+\)$/\1/;p;}')"
+	ISSUER_URL="$(${OPENSSL} x509 -noout -text -in "${CERT_DIR}/${CERT_NAME}" | sed -ne '/CA Issuers - URI:/{s/.*\(https\?:.\+\)$/\1/;p;}')"
 	[[ -n "${ISSUER_URL}" ]] || {
 		echo "Failed to extract issuer cert URL from certificate" >&2
 		exit 1
@@ -95,7 +96,7 @@ then
 		exit 1
 	}
 
-	cat ->"${CERT_DIR}/${CERT_NAME}.ca-bundle" <<<"${ISSUER_RESPONSE}" || {
+	cat ->"${CERT_DIR}/${CERT_BASE}.ca-bundle" <<<"${ISSUER_RESPONSE}" || {
 		echo "Failed to renew certificate chain certificate (update failed)" >&2
 		exit 1
 	}
