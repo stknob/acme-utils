@@ -27,7 +27,7 @@ declare -r CBLUE='\x1b[34m' CORANGE='\x1b[33m' CBROWN='\x1b[2;33m'
 # Handle command-line arguments
 #
 
-ARGS=$(getopt -n '' -o 'c:f:n:h' -l 'config:,file:,name:,replace-csr,replace-all,help' -- "$@")
+ARGS=$(getopt -n '' -o 'c:f:n:h' -l 'config:,file:,name:,replace-csr,replace-all,help,key-type:,key-bits:' -- "$@")
 [[ $? -eq 0 ]] || {
 	echo "Failed to parse arguments" >&2
 	exit 1
@@ -43,6 +43,9 @@ function print_usage() {
 		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
 		        --replace-all   Overwrite existing key files (domain and backup key), csr and certificate
 		        --replace-csr	Overwrite existing sign request file
+
+			--key-type	Key type, one of: 'rsa', 'prime256v1', 'secp384r1'
+			--key-bits	RSA only: Key size in bits
 	EOF
 	exit 1
 }
@@ -68,6 +71,12 @@ while true ; do
 	--replace-all)
 		shift; REGEN_ALL=1		# Overwrite existing keys, csr and cert
 		;;
+	--key-type)
+		shift; OPT_KEYTYPE="${1}"; shift;
+		;;
+	--key-bits)
+		shift; OPT_KEYBITS="${1}"; shift;
+		;;
 	-h|--help)
 		print_usage; exit 1
 		;;
@@ -85,6 +94,9 @@ source "${CONFIG_FILE}" || {
 	echo "Configuration file '${CONFIG_FILE}' not readable" >&2
 	exit 1
 }
+
+KEYTYPE="${OPT_KEYTYPE:-${KEYTYPE}}"
+KEYBITS="${OPT_KEYBITS:-${KEYBITS}}"
 
 PREREQS=( "${DIG}" "${OPENSSL}" "${WGET}" "${PWGEN}" )
 for x in ${PREREQS[@]}
