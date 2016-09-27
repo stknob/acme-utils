@@ -8,3 +8,7 @@ Makefile.in
 Makefile
 install-sh
 missing
+acme-renew-all
+acme-renew-single
+acme-setup-cert
+acme.conf
