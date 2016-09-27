@@ -312,20 +312,11 @@ cat /etc/ssl/openssl.cnf >"${TMPFILE}" || {
 	echo "Failed to generate temporary openssl config" >&2
 	exit 1
 }
-if [[ ${#SUBJECTS[*]} -gt 1 ]]
-then
-	SIGNOPTS="-extensions multisubject"
-	printf '[multisubject]\nsubjectAltName=%s\n' "${SAN}" >>"${TMPFILE}" || {
-		echo "Failed to generate temporary openssl config" >&2
-		exit 1
-	}
-else
-	SIGNOPTS="-extensions singlesubject"
-	printf '[singlesubject]\n' >>"${TMPFILE}" || {
-		echo "Failed to generate temporary openssl config" >&2
-		exit 1
-	}
-fi
+SIGNOPTS="-extensions SAN"
+printf '[SAN]\nsubjectAltName=%s\n' "${SAN}" >>"${TMPFILE}" || {
+	echo "Failed to generate temporary openssl config" >&2
+	exit 1
+}
 
 #
 # Create the domain key and its sha256 pin file
@@ -398,34 +389,19 @@ then
 	# Generate a sign request using the temporary configuration file
 	# and (optional) our list of alternative subject names
 	#
-	if [[ ${#SUBJECTS[*]} -eq 1 ]]
-	then
-		echo "Generating new single-subject sign request..."
-		${OPENSSL} req -new -sha256 \
-			-key  "${CERT_DIR}/${CERT_NAME}.key" \
-			-out  "${CERT_DIR}/${CERT_NAME}.csr" \
-			-subj "/CN=${PRIMARY}" \
-			>/dev/null
+	echo "Generating new sign request..."
+	${OPENSSL} req -new -sha256 \
+		-key  "${CERT_DIR}/${CERT_NAME}.key" \
+		-out  "${CERT_DIR}/${CERT_NAME}.csr" \
+		-subj "/CN=${PRIMARY}" \
+		-reqexts SAN \
+		-config "${TMPFILE}" \
+		>/dev/null
 
-		[[ $? -eq 0 ]] || {
-			echo "Failed to generate sign request" >&2
-			exit 1
-		}
-	else
-		echo "Generating new multi-subject sign request..."
-		${OPENSSL} req -new -sha256 \
-			-key  "${CERT_DIR}/${CERT_NAME}.key" \
-			-out  "${CERT_DIR}/${CERT_NAME}.csr" \
-			-subj "/CN=${PRIMARY}" \
-			-reqexts multisubject \
-			-config "${TMPFILE}" \
-			>/dev/null
-
-		[[ $? -eq 0 ]] || {
-			echo "Failed to generate sign request" >&2
-			exit 1
-		}
-	fi
+	[[ $? -eq 0 ]] || {
+		echo "Failed to generate sign request" >&2
+		exit 1
+	}
 
 	#
 	# Use ACLs to give letsencrypt user account access to certificate files
