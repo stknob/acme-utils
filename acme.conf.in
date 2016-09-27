@@ -23,5 +23,8 @@ ACCOUNT_KEY="${ACME_DIR}/account.key"
 # Only renew certificates that expire in the next X days
 MIN_EXPIRE_DAYS=30
 
+# Key type, on of: rsa, prime256v1, secp384r1
+KEYTYPE="rsa"
+
 # RSA Key size in bits
 KEYBITS=4096

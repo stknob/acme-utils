@@ -339,10 +339,24 @@ fi
 if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]
 then
 	echo "Generating new domain key..." >&2
-	${OPENSSL} genrsa -out "${CERT_DIR}/${CERT_NAME}.key" ${KEYBITS} || {
-		echo "Failed to generate domain key" >&2
+	case "${KEYTYPE:-RSA}" in
+	rsa|RSA)
+		${OPENSSL} genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:${KEYBITS} -out "${CERT_DIR}/${CERT_NAME}.key" || {
+			echo "Failed to generate RSA domain key" >&2
+			exit 1
+		}
+		;;
+	secp384r1|prime256v1)
+		${OPENSSL} genpkey -algorithm DSA -pkeyopt ec_paramgen_curve:${KEYTYPE} -out "${CERT_DIR}/${CERT_NAME}.key" || {
+			echo "Failed to generate ECDSA domain key" >&2
+			exit 1
+		}
+		;;
+	*)
+		echo "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa','prime256v1','secp384r1'" >&2
 		exit 1
-	}
+		;;
+	esac
 
 	chmod 400 "${CERT_DIR}/${CERT_NAME}.key" || {
 		echo "Failed to set domain key permissions" >&2
@@ -350,7 +364,7 @@ then
 	}
 
 	echo "Generating new sha256 pin file for domain key..." >&2
-	${OPENSSL} rsa -in "${CERT_DIR}/${CERT_NAME}.key" -outform der -pubout |\
+	${OPENSSL} pkey -in "${CERT_DIR}/${CERT_NAME}.key" -outform der -pubout |\
 		${OPENSSL} dgst -sha256 -binary |\
 		base64 > "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" \
 	|| {
@@ -497,13 +511,30 @@ then
 	}
 
 	echo "Generating new backup domain key..." >&2
-	${OPENSSL} genrsa -aes256 -out "${CERT_DIR}/${BACKUP_NAME}.key" -passout stdin ${KEYBITS} <<-EOF
-		${BACKUP_PASS}
-	EOF
-	[[ $? -eq 0 ]] || {
-		echo "Failed to generate backup domain key" >&2
+	case "${KEYTYPE:-RSA}" in
+	rsa|RSA)
+		${OPENSSL} genpkey -aes256 -pass stdin -algorithm RSA -pkeyopt rsa_keygen_bits:${KEYBITS} -out "${CERT_DIR}/${BACKUP_NAME}.key" <<-EOF
+			${BACKUP_PASS}
+		EOF
+		[[ $? -eq 0 ]] || {
+			echo "Failed to generate RSA backup domain key" >&2
+			exit 1
+		}
+		;;
+	secp384r1|prime256v1)
+		${OPENSSL} genpkey -aes256 -pass stdin -algorithm DSA -pkeyopt ec_paramgen_curve:${KEYTYPE} -out "${CERT_DIR}/${BACKUP_NAME}.key"  <<-EOF
+			${BACKUP_PASS}
+		EOF
+		[[ $? -eq 0 ]] || {
+			echo "Failed to generate ECDSA backup domain key" >&2
+			exit 1
+		}
+		;;
+	*)
+		echo "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa','prime256v1','secp384r1'" >&2
 		exit 1
-	}
+		;;
+	esac
 
 	chmod 400 "${CERT_DIR}/${BACKUP_NAME}.key" || {
 		echo "Failed to set backup domain key permissions" >&2
@@ -511,7 +542,7 @@ then
 	}
 
 	echo "Generating new sha256 pin file for backup domain key..." >&2
-	( ${OPENSSL} rsa -in "${CERT_DIR}/${BACKUP_NAME}.key" -outform der -pubout -passin stdin |\
+	( ${OPENSSL} pkey -in "${CERT_DIR}/${BACKUP_NAME}.key" -outform der -pubout -passin stdin |\
 		${OPENSSL} dgst -sha256 -binary | base64 >"${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256"; ) <<-EOF
 		${BACKUP_PASS}
 	EOF
