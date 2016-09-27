@@ -341,13 +341,13 @@ then
 	echo "Generating new domain key..." >&2
 	case "${KEYTYPE:-RSA}" in
 	rsa|RSA)
-		${OPENSSL} genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:${KEYBITS} -out "${CERT_DIR}/${CERT_NAME}.key" || {
+		${OPENSSL} genrsa -out "${CERT_DIR}/${CERT_NAME}.key" ${KEYBITS} || {
 			echo "Failed to generate RSA domain key" >&2
 			exit 1
 		}
 		;;
 	secp384r1|prime256v1)
-		${OPENSSL} genpkey -algorithm DSA -pkeyopt ec_paramgen_curve:${KEYTYPE} -out "${CERT_DIR}/${CERT_NAME}.key" || {
+		${OPENSSL} ecparam -genkey -name ${KEYTYPE} -out "${CERT_DIR}/${CERT_NAME}.key" || {
 			echo "Failed to generate ECDSA domain key" >&2
 			exit 1
 		}
@@ -513,7 +513,7 @@ then
 	echo "Generating new backup domain key..." >&2
 	case "${KEYTYPE:-RSA}" in
 	rsa|RSA)
-		${OPENSSL} genpkey -aes256 -pass stdin -algorithm RSA -pkeyopt rsa_keygen_bits:${KEYBITS} -out "${CERT_DIR}/${BACKUP_NAME}.key" <<-EOF
+		${OPENSSL} genrsa -aes256 -pass stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
 			${BACKUP_PASS}
 		EOF
 		[[ $? -eq 0 ]] || {
@@ -522,7 +522,7 @@ then
 		}
 		;;
 	secp384r1|prime256v1)
-		${OPENSSL} genpkey -aes256 -pass stdin -algorithm DSA -pkeyopt ec_paramgen_curve:${KEYTYPE} -out "${CERT_DIR}/${BACKUP_NAME}.key"  <<-EOF
+		${OPENSSL} ecparam -genkey -name ${KEYTYPE} | ${OPENSSL} pkey -aes256 -passout fd:3 -out "${CERT_DIR}/${BACKUP_NAME}.key"  3<<-EOF
 			${BACKUP_PASS}
 		EOF
 		[[ $? -eq 0 ]] || {
