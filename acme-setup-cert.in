@@ -525,7 +525,7 @@ then
 	echo "Generating new backup domain key..." >&2
 	case "${KEYTYPE:-RSA}" in
 	rsa|RSA)
-		${OPENSSL} genrsa -aes256 -pass stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
+		${OPENSSL} genrsa -aes256 -passout stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
 			${BACKUP_PASS}
 		EOF
 		[[ $? -eq 0 ]] || {
