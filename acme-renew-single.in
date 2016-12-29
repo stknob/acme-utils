@@ -1,23 +1,31 @@
 #!/bin/bash
 PATH="/usr/bin:/bin"
 CONFIG_FILE="@sysconfdir@/acme.conf"
+COMMON_FILE="@pkgdatadir@/libcommon.sh"
+ACME_TINY_PY="@pkgdatadir@/acme_tiny.py"
+
+source "${COMMON_FILE}" || {
+	echo "Failed to include shared function file" >&2
+	exit 1
+}
+
 [[ -f "${CONFIG_FILE}" ]] || {
-	echo "Configuration file '${CONFIG_FILE}' not found" >&2
+	pr_error "Configuration file '${CONFIG_FILE}' not found"
 	exit 1
 }
 
 source "${CONFIG_FILE}" || {
-	echo "Configuration file '${CONFIG_FILE}' not readable" >&2
+	pr_error "Configuration file '${CONFIG_FILE}' not readable"
 	exit 1
 }
 
 [[ ${UID} -eq $(id -u "${ACME_USER}") ]] || {
-	echo "This script needs to run as '${ACME_USER}'!" >&2
+	pr_error "This script needs to run as '${ACME_USER}'!"
 	exit 1
 }
 
-[[ -f "@pkgdatadir@/acme_tiny.py" ]] || {
-	echo "Could not find 'acme_tiny.py' ACME client in '@pkgdatadir@'" >&2
+[[ -f "${ACME_TINY_PY}" ]] || {
+	pr_error "Could not find 'acme_tiny.py' ACME client in '@pkgdatadir@'"
 	exit 1
 }
 
@@ -25,79 +33,37 @@ PREREQS=( "${OPENSSL}" "${WGET}" )
 for x in ${PREREQS[@]}
 do
 	[[ -x "${x}" ]] || {
-		echo "Could not find required pre-requisite '${x}'" >&2
+		pr_error "Could not find required pre-requisite '${x}'"
 		exit 1
 	}
 done
 
 [[ -f "${ACCOUNT_KEY}" ]] || {
-	echo "Account key missing" >&2
+	pr_error "Account key missing"
 	exit 1
 }
 
 [[ -d "${CERT_DIR}" ]] || {
-	echo "Certificate dir not found" >&2
+	pr_error "Certificate dir not found"
 	exit 1
 }
 
 [[ -d "${CHALLENGE_DIR}" ]] || {
-	echo "ACME challenge dir not found" >&2
+	pr_error "ACME challenge dir not found"
 	exit 1
 }
 
 CERT_NAME="${1}.crt"
 CERT_BASE="${CERT_NAME%.*}"
 [[ -f "${CERT_DIR}/${CERT_NAME}" ]] || {
-	echo "Domain certificate '${CERT_NAME}' not found" >&2
+	pr_error "Domain certificate '${CERT_NAME}' not found"
 	exit 1
 }
 
-echo "Renewing '${CERT_NAME}' certificate..." >&2
-CERT_RESPONSE="$(${PYTHON} "@pkgdatadir@/acme_tiny.py" \
-	--csr "${CERT_DIR}/${CERT_BASE}.csr" \
-	--account-key "${ACCOUNT_KEY}" \
-	--acme-dir "${CHALLENGE_DIR}")"
-
-[[ $? -eq 0 ]] || {
-	echo "Failed to renew certificate (see errors above)" >&2
+acme_handle_domain_cert "${CERT_DIR}/${CERT_BASE}.csr" "${CERT_DIR}/${CERT_BASE}.crt" || {
 	exit 1
 }
 
-[[ -n "${CERT_RESPONSE}" ]] || {
-	echo "Failed to renew certificate (empty output)" >&2
+acme_handle_issuer_cert "${CERT_DIR}/${CERT_BASE}.crt" "${CERT_DIR}/${CERT_BASE}.ca-bundle" || {
 	exit 1
 }
-
-cat ->"${CERT_DIR}/${CERT_NAME}" <<<"${CERT_RESPONSE}" || {
-	echo "Failed to renew certificate (update failed)" >&2
-	exit 1
-}
-
-# Get old and new issuer name for the ca-bundle fetching
-ISSUER_CUR="$(${OPENSSL} x509 -noout -subject_hash -in "${CERT_DIR}/${CERT_BASE}.ca-bundle")"
-ISSUER_NEW="$(${OPENSSL} x509 -noout -issuer_hash  -in "${CERT_DIR}/${CERT_NAME}")"
-
-# Check if issuer cert expires
-${OPENSSL} x509 -in "${CERT_DIR}/${CERT_BASE}.ca-bundle" \
-	-checkend $(( MIN_EXPIRE_DAYS * 86400 )) \
-	>/dev/null
-if [[ $? -gt 0 || "${ISSUER_CUR}" != "${ISSUER_NEW}" ]]
-then
-	echo "Renewing issuer chain certificate..." >&2
-	ISSUER_URL="$(${OPENSSL} x509 -noout -text -in "${CERT_DIR}/${CERT_NAME}" | sed -ne '/CA Issuers - URI:/{s/.*\(https\?:.\+\)$/\1/;p;}')"
-	[[ -n "${ISSUER_URL}" ]] || {
-		echo "Failed to extract issuer cert URL from certificate" >&2
-		exit 1
-	}
-
-	ISSUER_RESPONSE="$(${WGET} -q "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
-	[[ -n "${ISSUER_RESPONSE}" ]] || {
-		echo "Failed to renew certificate chain certificate from '${ISSUER_URL}'" >&2
-		exit 1
-	}
-
-	cat ->"${CERT_DIR}/${CERT_BASE}.ca-bundle" <<<"${ISSUER_RESPONSE}" || {
-		echo "Failed to renew certificate chain certificate (update failed)" >&2
-		exit 1
-	}
-fi

@@ -1,8 +1,7 @@
 #!/bin/bash
 PATH="/usr/bin:/bin"
-DOMAIN_REGEX='^(\*\.)?([[:alpha:]][[:alnum:]-]*[[:alnum:]]+\.)+([[:alpha:]]+)$'
-NAME_REGEX='^([[:alpha:]][[:alnum:]-]*[[:alnum:]]+\.)+([[:alpha:]]+)$'
 CONFIG_FILE="@sysconfdir@/acme.conf"
+COMMON_FILE="@pkgdatadir@/libcommon.sh"
 
 [[ ${UID} -eq 0 ]] || {
 	echo "Must be root to run this application" >&2
@@ -19,17 +18,18 @@ shopt -s nocasematch || {
 	exit 1
 }
 
-# Set some color constants
-declare -r CGREEN='\x1b[32m' CWHITE='\x1b[1;37m' CRED='\x1b[31m' CRESET='\x1b[0m' CBLINK='\x1b[5m' CYELLOW='\x1b[1;33m'
-declare -r CBLUE='\x1b[34m' CORANGE='\x1b[33m' CBROWN='\x1b[2;33m'
+source "${COMMON_FILE}" || {
+	echo "Failed to include shared function file" >&2
+	exit 1
+}
 
 #
 # Handle command-line arguments
 #
 
-ARGS=$(getopt -n '' -o 'c:f:n:h' -l 'config:,file:,name:,replace-csr,replace-all,help,key-type:,key-bits:' -- "$@")
+ARGS=$(getopt -n '' -o 'c:f:n:hq' -l 'config:,file:,name:,replace-csr,replace-all,help,key-type:,backup-pass:,quiet,skip-checks' -- "$@")
 [[ $? -eq 0 ]] || {
-	echo "Failed to parse arguments" >&2
+	pr_error "Failed to parse arguments" >&2
 	exit 1
 }
 
@@ -41,17 +41,24 @@ function print_usage() {
 		        -f|--file	File with list of DNS names
 		        -n|--name	Name prefix of generated files (default: first DNS name in list)
 		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
+		        -q|--quiet      Do not output result message
 		        --replace-all   Overwrite existing key files (domain and backup key), csr and certificate
 		        --replace-csr	Overwrite existing sign request file
 
-			--key-type	Key type, one of: 'rsa', 'prime256v1', 'secp384r1'
-			--key-bits	RSA only: Key size in bits
+		        --skip-checks   Do not perform CSR hostname checks
+
+		        --key-type	Key type, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+
+		        --backup-pass	Backup key password, either password or
+		                          'fd:ID' to read from file handle
+		                          'file:PATH' to read from file
+		                          'env:VARNAME' to read from an environment variable
 	EOF
 	exit 1
 }
 
 eval set -- "${ARGS}"
-REGEN_ALL=0 REGEN_CSR=0
+REGEN_ALL=0 REGEN_CSR=0 NO_CHECKS=0
 NAMES_FILE="" CERT_NAME=""
 NAMES_LIST=()
 while true ; do
@@ -65,6 +72,12 @@ while true ; do
 	-n|--name)
 		shift; CERT_NAME="${1}"; shift
 		;;
+	-q|--quiet)
+		shift; NO_OUTPUT=1
+		;;
+	--skip-checks)
+		shift; NO_CHECKS=1
+		;;
 	--replace-csr)
 		shift; REGEN_CSR=1		# Overwrite existing csr
 		;;
@@ -74,8 +87,8 @@ while true ; do
 	--key-type)
 		shift; OPT_KEYTYPE="${1}"; shift;
 		;;
-	--key-bits)
-		shift; OPT_KEYBITS="${1}"; shift;
+	--backup-pass)
+		shift; OPT_BACKUP_PASS="${1}"; shift;
 		;;
 	-h|--help)
 		print_usage; exit 1
@@ -86,43 +99,48 @@ while true ; do
 done
 
 [[ -f "${CONFIG_FILE}" ]] || {
-	echo "Configuration file '${CONFIG_FILE}' not found" >&2
+	pr_error "Configuration file '${CONFIG_FILE}' not found"
 	exit 1
 }
 
 source "${CONFIG_FILE}" || {
-	echo "Configuration file '${CONFIG_FILE}' not readable" >&2
+	pr_error "Configuration file '${CONFIG_FILE}' not readable"
 	exit 1
 }
-
-KEYTYPE="${OPT_KEYTYPE:-${KEYTYPE}}"
-KEYBITS="${OPT_KEYBITS:-${KEYBITS}}"
 
 PREREQS=( "${DIG}" "${OPENSSL}" "${WGET}" "${PWGEN}" )
 for x in ${PREREQS[@]}
 do
 	[[ -x "${x}" ]] || {
-		echo "Could not find required pre-requisite '${x}'" >&2
+		pr_error "Could not find required pre-requisite '${x}'"
 		exit 1
 	}
 done
 
 [[ -f "${ACCOUNT_KEY}" ]] || {
-	echo "Account key missing" >&2
+	pr_error "Account key missing"
 	exit 1
 }
 
 [[ -d "${CERT_DIR}" ]] || {
-	echo "Certificate dir not found" >&2
+	pr_error "Certificate dir not found"
 	exit 1
 }
 
 [[ -d "${CHALLENGE_DIR}" ]] || {
-	echo "ACME challenge dir not found" >&2
+	pr_error "ACME challenge dir not found"
 	exit 1
 }
 
+#
+# Validate and split key algo details
+#
+KEYINFO="$(acme_split_keytype "${OPT_KEYTYPE:-${KEYTYPE}}")"
+[[ $? -eq 0 && -n "${KEYINFO}" ]] || exit 1
 
+KEYALGO="$(cut -d' ' -f1 <<<"${KEYINFO}")"
+KEYTYPE="$(cut -d' ' -f2 <<<"${KEYINFO}")"
+KEYBITS="$(cut -d' ' -f3 <<<"${KEYINFO}")"
 
 #
 # Domain name list file handling (-f|--file <name>)
@@ -130,23 +148,24 @@ done
 if [[ -n "${NAMES_FILE}" ]]
 then
 	[[ -f "${NAMES_FILE}" ]] || {
-		echo "Domain list file '${NAMES_FILE}' not found" >&2
+		pr_error "Domain list file '${NAMES_FILE}' not found"
 		exit 1
 	}
 
 	TMP="$(cat "${NAMES_FILE}" 2>/dev/null)"
 	[[ -n "${TMP}" ]] || {
-		echo "Domain list file '${NAMES_FILE}' is empty" >&2
+		pr_error "Domain list file '${NAMES_FILE}' is empty"
 		exit 1
 	}
 
 	LINE_NR=0
 	while read LINE; do
 		(( LINE_NR++ ))
-		# skip comment lines
+		# skip comment and empty lines
+		[[ -z "${LINE}" ]] && continue
 		[[ "${LINE}" =~ ^# ]] && continue
 		[[ "${LINE}" =~ ${DOMAIN_REGEX} ]] || {
-			echo "Domain file '${NAMES_FILE}' contains invalid entry on line ${LINE_NR}: ${LINE}" >&2
+			pr_error "Domain file '${NAMES_FILE}' contains invalid entry on line ${LINE_NR}: ${LINE}"
 			exit 1
 		}
 		# Verified, add to list of names
@@ -160,7 +179,7 @@ fi
 while [[ $# -gt 0 ]]; do
 
 	[[ "${1}" =~ ${DOMAIN_REGEX} ]] || {
-		echo "Invalid domain name passed on command-line: ${1}" >&2
+		pr_error "Invalid domain name passed on command-line: ${1}"
 		exit 1
 	}
 
@@ -170,7 +189,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${#NAMES_LIST[*]} -gt 0 ]] || {
-	echo "No domain names given" >&2
+	pr_error "No domain names given"
 	exit 1
 }
 
@@ -181,26 +200,26 @@ if [[ -z "${CERT_NAME}" ]]
 then
 	CERT_NAME="${NAMES_LIST[0]}"
 	CERT_NAME="${CERT_NAME/#\*./wildcard.}"
-	echo "No certificate name given, using '${CERT_NAME}'" >&2
+	pr_info "No certificate filename prefix given, using '${CERT_NAME}'"
 else
-	echo "Using certificate name '${CERT_NAME}'" >&2
+	pr_info "Using certificate filename prefix '${CERT_NAME}'"
 fi
 [[ "${CERT_NAME}" =~ ${NAME_REGEX} ]] || {
-	echo "Certificate name should be a valid DNS name" >&2
+	pr_error "Certificate name should be a valid DNS name"
 	exit 1
 }
 
 #
 # Check for existing files
 #
-[ -f "${CERT_DIR}/${CERT_NAME}.crt" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
-	echo "Certificate file found, not replacing existing file!" >&2
-	exit 1
-}
-[ -f "${CERT_DIR}/${CERT_NAME}.csr" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
-	echo "Certificate sign request found, not replacing existing file!" >&2
-	exit 1
-}
+#[ -f "${CERT_DIR}/${CERT_NAME}.crt" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
+#	pr_error "Certificate file found, not replacing existing file!"
+#	exit 1
+#}
+#[ -f "${CERT_DIR}/${CERT_NAME}.csr" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
+#	pr_error "Certificate sign request found, not replacing existing file!"
+#	exit 1
+#}
 
 # Backup key name
 BACKUP_NAME="hpkp-backup-${CERT_NAME}"
@@ -220,19 +239,22 @@ else
 	SUBJECTS+=( "DNS:${PRIMARY}" )
 fi
 
+# Convert final list into hostnames
+HOSTNAMES="$(tr ' ' '\n' <<<"${SUBJECTS[@]}" | sed -e 's#^DNS:##')"
+
 #
 # Create temporary file and register cleanup func
 #
 TMPFILE="$(mktemp)"
 [[ $? -eq 0 ]] || {
-	echo "Failed to generate sign request" >&2
+	pr_error "Failed to generate sign request"
 	exit 1
 }
 
 CLEANUP_FILES=( "${TMPFILE}" )
 
 function cleanup() {
-	#echo "Cleaning up files..." >&2
+	#pr_info "Cleaning up files..."
 	for fn in ${CLEANUP_FILES[@]}; do
 		[[ -f "${fn}" ]] || continue;
 		rm -f "${fn}"
@@ -241,74 +263,75 @@ function cleanup() {
 
 trap cleanup EXIT INT KILL
 
-
-#
-# Check hostname setup
-#
-CHECKNAME="$(head -c 16 /dev/urandom | sha1sum - | cut -d' '  -f1)"
-[[ -n "${CHECKNAME}" ]] || {
-	echo "Failed to generate checkfile in '${CHALLENGE_DIR}', aborting" >&2
-	exit 1
-}
-
-SIGNATURE="$(cat /proc/sys/kernel/random/uuid)"
-[[ -n "${SIGNATURE}" ]] || {
-	echo "Failed to update '${CHECKFILE}', aborting" >&2
-	exit 1
-}
-
-CHECKFILE="${CHALLENGE_DIR}/${CHECKNAME}"
-echo "${SIGNATURE}" >"${CHECKFILE}" || {
-	echo "Failed to update '${CHECKFILE}', aborting" >&2
-	exit 1
-}
-
-CLEANUP_FILES+=( "${CHECKFILE}" )
-
-chmod 644 "${CHECKFILE}" || {
-	echo "Failed to update '${CHECKFILE}' permissions, aborting" >&2
-	exit 1
-}
-
-CHECKED=0 FAILED=0 TOTAL=${#SUBJECTS[@]}
-HOSTNAMES="$(tr ' ' '\n' <<<"${SUBJECTS[@]}")"
-echo "Checking ${TOTAL} name(s) for reachability..." >&2
-while read fn
-do
-	HOSTNAME="${fn/#DNS:/}"
-	HOSTNAME="${HOSTNAME/#\*./www.}"	# Use www. for wildcard certificates
-
-	(( CHECKED++ ))
-
-	echo -e "${CWHITE}[${CHECKED}/${TOTAL}]${CRESET} Checking DNS entries of ${HOSTNAME}..." >&2
-	IPADDR4="$(${DIG} +short -t A    "${HOSTNAME}" 2>/dev/null)"
-	IPADDR6="$(${DIG} +short -t AAAA "${HOSTNAME}" 2>/dev/null)"
-	[ -n "${IPADDR4}" -o -n "${IPADDR6}" ] || {
-		echo -e "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (does not resolve), please check your server setup!\n" >&2
-		(( FAILED++ ))
-		continue
+if [[ ${NO_CHECKS} -eq 0 ]]
+then
+	#
+	# Check hostname setup
+	#
+	CHECKNAME="$(head -c 16 /dev/urandom | sha1sum - | cut -d' '  -f1)"
+	[[ -n "${CHECKNAME}" ]] || {
+		pr_error "Failed to generate checkfile in '${CHALLENGE_DIR}', aborting"
+		exit 1
 	}
 
-	echo -e "${CWHITE}[${CHECKED}/${TOTAL}]${CRESET} Checking for http://${HOSTNAME}/.well-known/acme-challenge/${CHECKNAME}..." >&2
-	VALUE="$(${WGET} --quiet "http://${HOSTNAME}/.well-known/acme-challenge/${CHECKNAME}" -O -)" || {
-		echo -e "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (not found or other error), please check your server setup!\n" >&2
-		(( FAILED++ ))
-		continue
-	}
-	[[ "${VALUE}" == "${SIGNATURE}" ]] || {
-		echo -e "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (signature mismatch), please check your server setup!\n" >&2
-		(( FAILED++ ))
-		continue
+	SIGNATURE="$(cat /proc/sys/kernel/random/uuid)"
+	[[ -n "${SIGNATURE}" ]] || {
+		pr_error "Failed to update '${CHECKFILE}', aborting"
+		exit 1
 	}
 
-	echo -e "\t${CGREEN}OK${CRESET}: ${HOSTNAME} successfully verified\n" >&2
+	CHECKFILE="${CHALLENGE_DIR}/${CHECKNAME}"
+	echo "${SIGNATURE}" >"${CHECKFILE}" || {
+		pr_error "Failed to update '${CHECKFILE}', aborting"
+		exit 1
+	}
 
-done <<<"${HOSTNAMES}"
+	CLEANUP_FILES+=( "${CHECKFILE}" )
 
-[[ ${FAILED} -eq 0 ]] || {
-	echo "Some of the certificate subject names could not be verified, aborting!" >&2
-	exit 1
-}
+	chmod 644 "${CHECKFILE}" || {
+		pr_error "Failed to update '${CHECKFILE}' permissions, aborting"
+		exit 1
+	}
+
+	CHECKED=0 FAILED=0 TOTAL=${#SUBJECTS[@]}
+	pr_info "Checking ${TOTAL} name(s) for reachability..."
+	while read fn
+	do
+		HOSTNAME="${fn/#DNS:/}"
+		HOSTNAME="${HOSTNAME/#\*./www.}"	# Use www. for wildcard certificates
+
+		(( CHECKED++ ))
+
+		pr_echo "${CWHITE}[${CHECKED}/${TOTAL}]${CRESET} Checking DNS entries of ${HOSTNAME}..."
+		IPADDR4="$(${DIG} +short -t A    "${HOSTNAME}" 2>/dev/null)"
+		IPADDR6="$(${DIG} +short -t AAAA "${HOSTNAME}" 2>/dev/null)"
+		[ -n "${IPADDR4}" -o -n "${IPADDR6}" ] || {
+			pr_echo "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (does not resolve), please check your server setup!\n"
+			(( FAILED++ ))
+			continue
+		}
+
+		pr_echo "${CWHITE}[${CHECKED}/${TOTAL}]${CRESET} Checking for http://${HOSTNAME}/.well-known/acme-challenge/${CHECKNAME}..."
+		VALUE="$(${WGET} --quiet "http://${HOSTNAME}/.well-known/acme-challenge/${CHECKNAME}" -O -)" || {
+			pr_echo "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (not found or other error), please check your server setup!\n"
+			(( FAILED++ ))
+			continue
+		}
+		[[ "${VALUE}" == "${SIGNATURE}" ]] || {
+			pr_echo "\t${CRED}ERROR${CRESET}: Could not verify ${HOSTNAME} (signature mismatch), please check your server setup!\n"
+			(( FAILED++ ))
+			continue
+		}
+
+		pr_echo "\t${CGREEN}OK${CRESET}: ${HOSTNAME} successfully verified\n"
+
+	done <<<"${HOSTNAMES}"
+
+	[[ ${FAILED} -eq 0 ]] || {
+		pr_error "Some of the certificate subject names could not be verified, aborting!"
+		exit 1
+	}
+fi
 
 #
 # Convert hostnames to alternative subject list
@@ -317,16 +340,16 @@ done <<<"${HOSTNAMES}"
 SIGNOPTS=""
 SAN="$(echo -n "${SUBJECTS[@]}" | tr ' ' ',')"
 [[ -n "${SAN}" ]] || {
-	echo "Failed to generate subjectAltNames list" >&2
+	pr_error "Failed to generate subjectAltNames list"
 	exit 1
 }
 cat /etc/ssl/openssl.cnf >"${TMPFILE}" || {
-	echo "Failed to generate temporary openssl config" >&2
+	pr_error "Failed to generate temporary openssl config"
 	exit 1
 }
 SIGNOPTS="-extensions SAN"
 printf '[SAN]\nsubjectAltName=%s\n' "${SAN}" >>"${TMPFILE}" || {
-	echo "Failed to generate temporary openssl config" >&2
+	pr_error "Failed to generate temporary openssl config"
 	exit 1
 }
 
@@ -337,55 +360,55 @@ REGEN_DOMAIN_KEY=0
 if [[ -f "${CERT_DIR}/${CERT_NAME}.key" ]]
 then
 	if [[ ${REGEN_ALL} -eq 0 ]]; then
-		echo "Keeping existing domain key" >&2
+		pr_info "Keeping existing domain key"
 		REGEN_DOMAIN_KEY=0
 	else
-		echo "Replacing domain key" >&2
+		pr_info "Replacing domain key"
 		REGEN_DOMAIN_KEY=1
 	fi
 else
-	#echo "No existing domain key found, generating a new one" >&2
+	#pr_info "No existing domain key found, generating a new one"
 	REGEN_DOMAIN_KEY=1
 fi
 
 if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]
 then
-	echo "Generating new domain key..." >&2
-	case "${KEYTYPE:-RSA}" in
-	rsa|RSA)
+	pr_info "Generating new domain key..."
+	case "${KEYALGO}" in
+	rsa)
 		${OPENSSL} genrsa -out "${CERT_DIR}/${CERT_NAME}.key" ${KEYBITS} || {
-			echo "Failed to generate RSA domain key" >&2
+			pr_error "Failed to generate RSA domain key"
 			exit 1
 		}
 		;;
-	secp384r1|prime256v1)
+	ec)
 		${OPENSSL} ecparam -genkey -name ${KEYTYPE} -out "${CERT_DIR}/${CERT_NAME}.key" || {
-			echo "Failed to generate ECDSA domain key" >&2
+			pr_error "Failed to generate ECDSA domain key"
 			exit 1
 		}
 		;;
 	*)
-		echo "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa','prime256v1','secp384r1'" >&2
+		pr_error "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa<BITS>','prime256v1','secp384r1'"
 		exit 1
 		;;
 	esac
 
 	chmod 400 "${CERT_DIR}/${CERT_NAME}.key" || {
-		echo "Failed to set domain key permissions" >&2
+		pr_error "Failed to set domain key permissions"
 		exit 1
 	}
 
-	echo "Generating new sha256 pin file for domain key..." >&2
+	pr_info "Generating new sha256 pin file for domain key..."
 	${OPENSSL} pkey -in "${CERT_DIR}/${CERT_NAME}.key" -outform der -pubout |\
 		${OPENSSL} dgst -sha256 -binary |\
 		base64 > "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" \
 	|| {
-		echo "Failed to generate domain key pin file" >&2
+		pr_error "Failed to generate domain key pin file"
 		exit 1
 	}
 
 	chmod 644 "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" || {
-		echo "Failed to set domain key pin file permissions" >&2
+		pr_error "Failed to set domain key pin file permissions"
 		exit 1
 	}
 fi
@@ -394,18 +417,30 @@ fi
 REGEN_DOMAIN_CSR=0
 if [[ -f "${CERT_DIR}/${CERT_NAME}.csr" ]]
 then
+	CSR_NAMES="$(acme_get_csr_names "${CERT_DIR}/${CERT_NAME}.csr")"
+	[[ -n "${CSR_NAMES}" ]] || {
+		pr_error "Failed to read CSR name entries"
+		exit 1
+	}
+
+	new="$(sort -u <<<"${HOSTNAMES}" | tr -d '\n' | md5sum -)"
+	cur="$(sort -u <<<"${CSR_NAMES}" | tr -d '\n' | md5sum -)"
+
 	if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]; then
-		echo "Domain keys have been replaced, need to regenerate sign request" >&2
+		pr_info "Domain keys have been replaced, need to regenerate sign request"
+		REGEN_DOMAIN_CSR=1
+	elif [[ "${new}" != "${cur}" ]]; then
+		pr_info "List of certificate names has changed, regenerating sign request"
 		REGEN_DOMAIN_CSR=1
 	elif [[ ${REGEN_CSR} -eq 1 ]]; then
-		echo "Replacing sign request" >&2
+		pr_info "Replacing sign request"
 		REGEN_DOMAIN_CSR=1
 	else
-		echo "Keeping existing sign request" >&2
+		pr_info "Keeping existing sign request"
 		REGEN_DOMAIN_CSR=0
 	fi
 else
-	#echo "No existing sign request found, generating a new one" >&2
+	#pr_info "No existing sign request found, generating a new one"
 	REGEN_DOMAIN_CSR=1
 fi
 
@@ -415,7 +450,7 @@ then
 	# Generate a sign request using the temporary configuration file
 	# and (optional) our list of alternative subject names
 	#
-	echo "Generating new sign request..."
+	pr_info "Generating new sign request..."
 	${OPENSSL} req -new -sha256 \
 		-key  "${CERT_DIR}/${CERT_NAME}.key" \
 		-out  "${CERT_DIR}/${CERT_NAME}.csr" \
@@ -425,7 +460,7 @@ then
 		>/dev/null
 
 	[[ $? -eq 0 ]] || {
-		echo "Failed to generate sign request" >&2
+		pr_error "Failed to generate sign request"
 		exit 1
 	}
 
@@ -433,7 +468,7 @@ then
 	# Use ACLs to give letsencrypt user account access to certificate files
 	#
 	${SETFACL} -m "user:${ACME_USER}:r" "${CERT_DIR}/${CERT_NAME}.csr" || {
-		echo "Failed to give ${ACME_USER} read permission on sign request" >&2
+		pr_error "Failed to give ${ACME_USER} read permission on sign request"
 		exit 1
 	}
 fi
@@ -446,14 +481,14 @@ REGEN_DOMAIN_CERT=0
 if [[ -n "${CERT_DIR}/${CERT_NAME}.crt" ]]
 then
 	if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]; then
-		echo "Domain key has been replaced, need to generate a new temporary certificate" >&2
+		pr_info "Domain key has been replaced, need to generate a new temporary certificate"
 		REGEN_DOMAIN_CERT=1
 	else
-		echo "Keeping existing domain certificate" >&2
+		pr_info "Keeping existing domain certificate"
 		REGEN_DOMAIN_CERT=0
 	fi
 else
-	#echo "No existing certificate found, generating a new temporary one" >&2
+	#pr_info "No existing certificate found, generating a new temporary one"
 	REGEN_DOMAIN_CERT=1
 fi
 
@@ -462,7 +497,7 @@ then
 	#
 	# Make the HTTP/-whatever daemon happy by generating an initial self-signed SSL cert
 	#
-	echo "Generating initial self-signed certificate (to make \$HTTP_SERVER happy)" >&2
+	pr_info "Generating initial self-signed certificate (to make \$HTTP_SERVER happy)"
 	${OPENSSL} x509 \
 		-req -sha256 \
 		-in "${CERT_DIR}/${CERT_NAME}.csr" \
@@ -474,23 +509,23 @@ then
 		>/dev/null
 
 	[[ $? -eq 0 ]] || {
-		echo "Failed to self-sign initial certificate" >&2
+		pr_error "Failed to self-sign initial certificate"
 		exit 1
 	}
 
 	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.crt" || {
-		echo "Failed to give ${ACME_USER} read/write permission on certificate" >&2
+		pr_error "Failed to give ${ACME_USER} read/write permission on certificate"
 		exit 1
 	}
 
-	echo "Generating temporary ca chain file..." >&2
+	pr_info "Generating temporary ca chain file..."
 	cat "${CERT_DIR}/${CERT_NAME}.crt" >"${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
-		echo "Failed to create temporary ca chain file" >&2
+		pr_error "Failed to create temporary ca chain file"
 		exit 1
 	}
 
 	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
-		echo "Failed to give ${ACME_USER} read/write permission on chain file" >&2
+		pr_error "Failed to give ${ACME_USER} read/write permission on chain file"
 		exit 1
 	}
 fi
@@ -503,114 +538,164 @@ REGEN_BACKUP_KEY=0
 if [[ -f "${CERT_DIR}/${BACKUP_NAME}.key" ]]
 then
 	if [[ ${REGEN_ALL} -eq 0 ]]; then
-		echo "Keeping existing backup domain key" >&2
+		pr_info "Keeping existing backup domain key"
 		REGEN_BACKUP_KEY=0
 	else
-		echo "Replacing backup domain key" >&2
+		pr_info "Replacing backup domain key"
 		REGEN_BACKUP_KEY=1
 	fi
 else
-	#echo "No backup domain key found, generating a new one" >&2
+	#pr_info "No backup domain key found, generating a new one"
 	REGEN_BACKUP_KEY=1
 fi
 
 if [[ ${REGEN_BACKUP_KEY} -eq 1 ]]
 then
-	BACKUP_PASS="$(${PWGEN} -Bcns 40)"
-	[[ -n "${BACKUP_PASS}" ]] || {
-		echo "Failed to generate backup domain key password" >&2
-		exit 1
-	}
+	case "${OPT_BACKUP_PASS:-none}" in
+	"env:"*)
+		acme_has "${OPT_BACKUP_PASS#env:}" $(env | cut -d= -f1 | tr '\n' ' ') || {
+			pr_error "Invalid environment variable id passed"
+			exit 1
+		}
 
-	echo "Generating new backup domain key..." >&2
-	case "${KEYTYPE:-RSA}" in
-	rsa|RSA)
-		${OPENSSL} genrsa -aes256 -passout stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
-			${BACKUP_PASS}
-		EOF
-		[[ $? -eq 0 ]] || {
-			echo "Failed to generate RSA backup domain key" >&2
+		BACKUP_PASS="$(eval "echo \${${OPT_BACKUP_PASS#env:}}")"
+		[[ -n "${BACKUP_PASS}" ]] || {
+			pr_error "Failed to get backup domain key password"
 			exit 1
 		}
 		;;
-	secp384r1|prime256v1)
-		${OPENSSL} ecparam -genkey -name ${KEYTYPE} | ${OPENSSL} pkey -aes256 -passout fd:3 -out "${CERT_DIR}/${BACKUP_NAME}.key"  3<<-EOF
-			${BACKUP_PASS}
-		EOF
-		[[ $? -eq 0 ]] || {
-			echo "Failed to generate ECDSA backup domain key" >&2
+	"fd:"*)
+		true 2>/dev/null >&${OPT_BACKUP_PASS#fd:} || {
+			pr_error "Invalid file descriptor id passed"
+			exit 1
+		}
+
+		read BACKUP_PASS <${OPT_BACKUP_PASS#fd:}
+		[[ -n "${BACKUP_PASS}" ]] || {
+			pr_error "Failed to get backup domain key password"
+			exit 1
+		}
+		;;
+	"file:"*)
+		[[ -f "${OPT_BACKUP_PASS#file:}" ]] || {
+			pr_error "Invalid password file passed"
+			exit 1
+		}
+
+		BACKUP_PASS="$(cat "${OPT_BACKUP_PASS#file:}" 2>/dev/null)"
+		[[ -n "${BACKUP_PASS}" ]] || {
+			pr_error "Failed to get backup domain key password"
+			exit 1
+		}
+		;;
+	"none")
+		BACKUP_PASS="$(${PWGEN} -Bcns 40)"
+		[[ -n "${BACKUP_PASS}" ]] || {
+			pr_error "Failed to generate backup domain key password"
 			exit 1
 		}
 		;;
 	*)
-		echo "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa','prime256v1','secp384r1'" >&2
+		BACKUP_PASS="${OPT_BACKUP_PASS}"
+		[[ -n "${BACKUP_PASS}" ]] || {
+			pr_error "Failed to get backup domain key password"
+			exit 1
+		}
+		;;
+	esac
+
+	pr_info "Generating new backup domain key..."
+	case "${KEYALGO}" in
+	rsa)
+		${OPENSSL} genrsa -aes256 -passout stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
+			${BACKUP_PASS}
+		EOF
+		[[ $? -eq 0 ]] || {
+			pr_error "Failed to generate RSA backup domain key"
+			exit 1
+		}
+		;;
+	ec)
+		${OPENSSL} ecparam -genkey -name ${KEYTYPE} | ${OPENSSL} pkey -aes256 -passout fd:3 -out "${CERT_DIR}/${BACKUP_NAME}.key"  3<<-EOF
+			${BACKUP_PASS}
+		EOF
+		[[ $? -eq 0 ]] || {
+			pr_error "Failed to generate ECDSA backup domain key"
+			exit 1
+		}
+		;;
+	*)
+		pr_error "Invalid or unknown key type: '${KEYTYPE}', use one of: 'rsa<BITS>','prime256v1','secp384r1'"
 		exit 1
 		;;
 	esac
 
 	chmod 400 "${CERT_DIR}/${BACKUP_NAME}.key" || {
-		echo "Failed to set backup domain key permissions" >&2
+		pr_error "Failed to set backup domain key permissions"
 		exit 1
 	}
 
-	echo "Generating new sha256 pin file for backup domain key..." >&2
+	pr_info "Generating new sha256 pin file for backup domain key..."
 	( ${OPENSSL} pkey -in "${CERT_DIR}/${BACKUP_NAME}.key" -outform der -pubout -passin stdin |\
 		${OPENSSL} dgst -sha256 -binary | base64 >"${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256"; ) <<-EOF
 		${BACKUP_PASS}
 	EOF
 	[[ $? -eq 0 ]] || {
-		echo "Failed to generate backup domain key pin file" >&2
+		pr_error "Failed to generate backup domain key pin file"
 		exit 1
 	}
 
 	chmod 644 "${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256" || {
-		echo "Failed to set backup domain key pin file permissions" >&2
+		pr_error "Failed to set backup domain key pin file permissions"
 		exit 1
 	}
 
-	# Print password for backup key
-	echo -e "$(cat -<<-EOF
-		${CWHITE}==============================================================${CRESET}
-		Password for '${CERT_NAME}' HPKP backup key:
+	if [[ ${NO_OUTPUT} -eq 0 ]]
+	then
+		# Print password for backup key
+		echo -e "$(cat -<<-EOF
+			${CWHITE}==============================================================${CRESET}
+			Password for '${CERT_NAME}' HPKP backup key:
 
-		        ${CWHITE}${BACKUP_PASS}${CRESET}
+			        ${CWHITE}${BACKUP_PASS}${CRESET}
 
-		--------------------------------------------------------------
-		      ${CORANGE}${CBLINK}!!! Please store this password in a safe place !!!${CRESET}
-		${CWHITE}==============================================================${CRESET}
-	EOF
-	)"
+			--------------------------------------------------------------
+			      ${CORANGE}${CBLINK}!!! Please store this password in a safe place !!!${CRESET}
+			${CWHITE}==============================================================${CRESET}
+		EOF
+		)"
+	fi
 fi
 
+if [[ ${NO_OUTPUT} -eq 0 ]]
+then
+	#
+	# Show configuration details including HSTS and HPKP headers
+	#
+	MASTER_PIN="$(cat "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" 2>/dev/null)"
+	[[ -n "${MASTER_PIN}" ]] || {
+		pr_error "Failed to read domain key pin"
+		exit 1
+	}
 
-#
-# Show configuration details including HSTS and HPKP headers
-#
+	BACKUP_PIN="$(cat "${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256" 2>/dev/null)"
+	[[ -n "${BACKUP_PIN}" ]] || {
+		pr_error "Failed to read domain key pin"
+		exit 1
+	}
 
-MASTER_PIN="$(cat "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" 2>/dev/null)"
-[[ -n "${MASTER_PIN}" ]] || {
-	echo "Failed to read domain key pin" >&2
-	exit 1
-}
+	# Print configuration details
+	cat -<<-EOF
 
-BACKUP_PIN="$(cat "${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256" 2>/dev/null)"
-[[ -n "${BACKUP_PIN}" ]] || {
-	echo "Failed to read domain key pin" >&2
-	exit 1
-}
+	Configuration details for Apache-2.x:
 
+	    SSLEngine             on
+	    SSLCertificateKeyFile ${CERT_DIR}/${CERT_NAME}.key
+	    SSLCertificateFile    ${CERT_DIR}/${CERT_NAME}.crt
+	    SSLCACertificateFile  ${CERT_DIR}/${CERT_NAME}.ca-bundle
 
-# Print configuration details
-cat -<<-EOF
+	    Header always set "Strict-Transport-Security" "max-age=15552000"
+	    Header always set "Public-Key-Pins" "pin-sha256=\"${MASTER_PIN}\"; pin-sha256=\"${BACKUP_PIN}\"; max-age=86400; report-uri=\"http://report.axsentis.net/hpkp-report.php\""
 
-Configuration details for Apache-2.x:
-
-    SSLEngine             on
-    SSLCertificateKeyFile ${CERT_DIR}/${CERT_NAME}.key
-    SSLCertificateFile    ${CERT_DIR}/${CERT_NAME}.crt
-    SSLCACertificateFile  ${CERT_DIR}/${CERT_NAME}.ca-bundle
-
-    Header always set "Strict-Transport-Security" "max-age=15552000"
-    Header always set "Public-Key-Pins" "pin-sha256=\"${MASTER_PIN}\"; pin-sha256=\"${BACKUP_PIN}\"; max-age=86400; report-uri=\"http://report.axsentis.net/hpkp-report.php\""
-
-EOF
+	EOF
+fi

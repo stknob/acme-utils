@@ -1,0 +1,302 @@
+#
+# Shared functions and constants
+#
+NO_OUTPUT=0
+
+# Path to external tools
+PYTHON="@PYTHON@"
+OPENSSL="@OPENSSL@"
+SETFACL="@SETFACL@"
+PWGEN="@PWGEN@"
+WGET="@WGET@"
+DIG="@DIG@"
+
+# Dedicated user and group for fetch/renew operations
+ACME_USER="acme"
+ACME_GROUP="acme"
+
+# Locations
+ACME_DIR="@sysconfdir@"
+CERT_DIR="@certdir@"
+CHALLENGE_DIR="@challengedir@"
+ACCOUNT_KEY="${ACME_DIR}/account.key"
+
+# Only renew certificates that expire in the next X days
+MIN_EXPIRE_DAYS=30
+
+# Defaults
+KEYTYPE="rsa4096"
+
+# 
+declare -r RSA_KEYSIZES=( 2048 3072 4096 )
+
+# Some regex constants
+declare -r DOMAIN_REGEX='^(\*\.)?([[:alpha:]][[:alnum:]-]*[[:alnum:]]+\.)+([[:alpha:]]+)$'
+declare -r NAME_REGEX='^([[:alpha:]][[:alnum:]-]*[[:alnum:]]+\.)+([[:alpha:]]+)$'
+
+# Set some color constants
+declare -r CGREEN='\x1b[32m' CWHITE='\x1b[1;37m' CRED='\x1b[31m' CRESET='\x1b[0m' CBLINK='\x1b[5m' CYELLOW='\x1b[1;33m'
+declare -r CBLUE='\x1b[34m' CORANGE='\x1b[33m' CBROWN='\x1b[2;33m'
+
+# Screen output functions
+function pr_echo() {
+	[[ ${NO_OUTPUT:-0} -eq 0 ]] && \
+		echo -e "${*}" >&2
+}
+
+function pr_info() {
+	[[ ${NO_OUTPUT:-0} -eq 0 ]] && \
+		echo -e "${*}" >&2
+}
+
+function pr_warn() {
+	echo -e "WARNING: ${*}" >&2
+}
+
+function pr_error() {
+	echo -e "ERROR: ${*}" >&2
+}
+
+function pr_fatal() {
+	echo -e "FATAL: ${*}" >&2
+	exit 1
+}
+
+function acme_has() {
+	local val="${1}"
+	[[ -n "${val}" ]] || {
+		pr_echo "Usage: $0 <val> <item1...itemN>"
+		exit 1
+	}
+
+	while shift; do
+		[[ "${1}" == "${val}" ]] && return 0
+	done
+	return 1
+}
+
+function acme_split_keytype() {
+	local keytype="${1}"
+	[[ -n "${keytype}" ]] || {
+		pr_error "Usage: $0 <keytype>"
+		return 1
+	}
+
+	case "${keytype}" in
+	rsa|RSA)
+		keyalgo="rsa"
+		keybits="${KEYBITS}"
+		keytype="rsa${keybits}"
+		acme_has "${keybits}" "${RSA_KEYSIZES[@]}" || {
+			pr_error "Invalid RSA key size '${keybits}', valid ones: ${RSA_KEYSIZES[*]}"
+			return 1
+		}
+		;;
+	rsa*|RSA*)
+		keyalgo="rsa"
+		keybits="${keytype##*[[:alpha:]]}"
+		acme_has "${keybits}" "${RSA_KEYSIZES[@]}" || {
+			pr_error "Invalid RSA key size '${keybits}', valid ones: ${RSA_KEYSIZES[*]}"
+			return 1
+		}
+		;;
+	prime256v1|secp384r1)
+		keyalgo="ec"
+		keybits="$(sed -e 's:.*\([0-9]\{3,\}\).*:\1:' <<<"${keytype}")"
+		;;
+	*)
+		pr_error "Unknown or invalid keytype: '${keytype}', choose one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'"
+		return 1
+		;;
+	esac
+
+	echo "${keyalgo} ${keytype} ${keybits}"
+	return 0
+}
+
+function acme_get_csr_names() {
+	local csrfile="${1}"
+	[[ -f "${csrfile}" ]] || {
+		pr_echo "Usage: $0 <csr-file>"
+		exit 1
+	}
+
+	SUBJECT="$(${OPENSSL} req -noout -in "${csrfile}" -subject | sed -e 's:^.*CN=\([^ ,/]\+\).*$:\1:i')"
+	[[ -n "${SUBJECT}" ]] || {
+		pr_error "Failed to extract CSR subject name"
+		exit 1
+	}
+
+	SAN=( "$(${OPENSSL} req -noout -text -in "${csrfile}" | awk '/X509v3 Subject Alternative Name:/{
+			getline
+			while ($0 ~ /^ +DNS:/){
+				line = gensub(/ +DNS:([^ ,]+)/, "\\1", "G")
+				line = gensub(/,+/, "\n", "G", line)
+				print line
+				getline
+			}
+		}
+		')"
+	)
+
+	if [[ "${#SAN[@]}" -gt 0 ]]
+	then
+		acme_has "${SUBJECT}" ${SAN[@]} || {
+			echo "${SUBJECT}" "${SAN[@]}"
+			return 0
+		}
+
+		echo "${SAN[@]}"
+		return 0
+	fi
+
+	echo "${SUBJECT}"
+	return 0
+}
+
+function acme_get_issuer_cert_url() {
+	local crtfile="${1}"
+	[[ -n "${crtfile}" ]] || {
+		pr_error "Usage: $0 <certficiate-file>"
+		return 1
+	}
+
+	ISSUER_URL="$(${OPENSSL} x509 -noout -text -in "${crtfile}" | sed -ne '/CA Issuers - URI:/{s/.*\(https\?:.\+\)$/\1/;p;}')"
+	[[ -n "${ISSUER_URL}" ]] || {
+		pr_error "Failed to extract issuer cert URL from certificate"
+		return 1
+	}
+
+	echo "${ISSUER_URL}"
+	return 0
+}
+
+function acme_get_issuer_cert() {
+	local crtfile="${1}"
+	[[ -n "${crtfile}" ]] || {
+		pr_error "Usage: $0 <certficiate-file>"
+		return 1
+	}
+
+	ISSUER_URL="$(acme_get_issuer_cert_url "${crtfile}")"
+	[[ -n "${ISSUER_URL}" ]] || return 1
+
+	ISSUER_RESPONSE="$(${WGET} -q "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
+	[[ -n "${ISSUER_RESPONSE}" ]] || {
+		pr_error "Failed to renew certificate chain certificate from '${ISSUER_URL}'"
+		return 1
+	}
+
+	echo "${ISSUER_RESPONSE}"
+	return 0
+}
+
+function acme_check_domain_cert() {
+	local crtfile="${1}"
+	[[ -n "${crtfile}" ]] || {
+		pr_error "Usage: $0 <certificate-file>"
+		return 1
+	}
+
+	[[ -f "${crtfile}" ]] || {
+		pr_info "Certificate file '${crtfile}' not found, signing forced"
+		return 0
+	}
+
+	CERT_NAME="$(basename "${crtfile}")"
+
+	# Get current issuer
+	ISSUER="$(${OPENSSL} x509 -noout -issuer -in "${crtfile}")"
+	[[ $? -eq 0 ]] || {
+		#pr_info "Failed to load certificate '${crtfile}', skipping"
+		return 1
+	}
+	grep -q "/C=US/O=Let's Encrypt/" <<<"${ISSUER}" || {
+		#pr_info "Certificate '${CERT_NAME}' not signed by letsencrypt CA, skipping"
+		return 1
+	}
+
+	${OPENSSL} x509 -in "${crtfile}" \
+		-checkend $(( MIN_EXPIRE_DAYS * 86400 )) \
+		>/dev/null
+	[[ $? -gt 0 ]] || {
+		pr_info "Domain certificate '${CERT_NAME}' does not expire within the next ${MIN_EXPIRE_DAYS} days, skipping"
+		return 1
+	}
+
+	return 0
+}
+
+function acme_handle_domain_cert() {
+	local csrfile="${1}"
+	local outfile="${2}"
+	[[ -n "${csrfile}" && -n "${outfile}" ]] || {
+		pr_error "Usage: $0 <sign-request-file> <certificate-file>"
+		return 1
+	}
+	[[ -f "${csrfile}" ]] || {
+		pr_error "Certificate sign request file '${csrfile}' not found"
+		return 1
+	}
+
+	[[ -d "${CHALLENGE_DIR}" ]] || {
+		pr_error "ACME challenge dir not found"
+		exit 1
+	}
+
+	CERT_NAME="$(basename "${outfile}")"
+
+	pr_info "Renewing '${CERT_NAME}' certificate..."
+	CERT_RESPONSE="$(${PYTHON} "${ACME_TINY_PY}" \
+		--csr "${csrfile}" \
+		--account-key "${ACCOUNT_KEY}" \
+		--acme-dir "${CHALLENGE_DIR}")"
+
+	[[ $? -eq 0 ]] || {
+		pr_error "Failed to renew certificate (see errors above)"
+		return 1
+	}
+
+	[[ -n "${CERT_RESPONSE}" ]] || {
+		pr_error "Failed to renew certificate (empty output)"
+		return 1
+	}
+
+	cat ->"${outfile}" <<<"${CERT_RESPONSE}" || {
+		pr_error "Failed to renew certificate (update failed)"
+		return 1
+	}
+
+	return 0
+}
+
+function acme_handle_issuer_cert() {
+	local crtfile="${1}"
+	local outfile="${2}"
+	[[ -n "${crtfile}" && -n "${outfile}" ]] || {
+		pr_error "Usage: $0 <certficiate-file> <issuer-cert-file>"
+		return 1
+	}
+
+	# Get old and new issuer name for the ca-bundle fetching
+	ISSUER_CUR="$(${OPENSSL} x509 -noout -subject_hash -in "${outfile}")"
+	ISSUER_NEW="$(${OPENSSL} x509 -noout -issuer_hash  -in "${crtfile}")"
+
+	# Check if issuer cert expires
+	${OPENSSL} x509 -in "${outfile}" \
+		-checkend $(( MIN_EXPIRE_DAYS * 86400 )) \
+		>/dev/null
+	if [[ $? -gt 0 || "${ISSUER_CUR}" != "${ISSUER_NEW}" ]]
+	then
+		pr_info "Renewing issuer chain certificate..."
+		ISSUER_RESPONSE="$(acme_get_issuer_cert "${crtfile}")"
+		[[ -n "${ISSUER_RESPONSE}" ]] || return 1
+
+		cat ->"${outfile}" <<<"${ISSUER_RESPONSE}" || {
+			pr_error "Failed to renew certificate chain certificate (update failed)"
+			return 1
+		}
+	fi
+
+	return 0
+}

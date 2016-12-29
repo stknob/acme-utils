@@ -7,12 +7,14 @@ sbin_SCRIPTS = \
 	acme-setup-cert
 
 CLEANFILES = \
+	libcommon.sh \
 	acme-renew-single \
 	acme-renew-all \
 	acme-setup-cert \
 	acme.conf
 
 pkgdata_DATA = \
+	libcommon.sh \
 	acme-tiny/acme_tiny.py
 
 sysconf_DATA = \
@@ -43,3 +45,6 @@ acme-renew-all: acme-renew-all.in Makefile
 acme-setup-cert: acme-setup-cert.in Makefile
 	$(do_subst) < $(srcdir)/acme-setup-cert.in > acme-setup-cert
 	chmod +x acme-setup-cert
+
+libcommon.sh: libcommon.sh.in Makefile
+	$(do_subst) < $(srcdir)/libcommon.sh.in > libcommon.sh

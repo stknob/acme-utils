@@ -3,28 +3,28 @@
 #
 
 # Path to external tools
-PYTHON="@PYTHON@"
-OPENSSL="@OPENSSL@"
-SETFACL="@SETFACL@"
-PWGEN="@PWGEN@"
-WGET="@WGET@"
-DIG="@DIG@"
+#PYTHON="@PYTHON@"
+#OPENSSL="@OPENSSL@"
+#SETFACL="@SETFACL@"
+#PWGEN="@PWGEN@"
+#WGET="@WGET@"
+#DIG="@DIG@"
 
 # Dedicated user and group for fetch/renew operations
-ACME_USER="acme"
-ACME_GROUP="acme"
+#ACME_USER="acme"
+#ACME_GROUP="acme"
 
 # Locations
-ACME_DIR="@sysconfdir@"
-CERT_DIR="@certdir@"
-CHALLENGE_DIR="@challengedir@"
-ACCOUNT_KEY="${ACME_DIR}/account.key"
+#ACME_DIR="@sysconfdir@"
+#CERT_DIR="@certdir@"
+#CHALLENGE_DIR="@challengedir@"
+#ACCOUNT_KEY="${ACME_DIR}/account.key"
 
 # Only renew certificates that expire in the next X days
 MIN_EXPIRE_DAYS=30
 
-# Key type, on of: rsa, prime256v1, secp384r1
-KEYTYPE="rsa"
+# Key type, on of: rsa<BITS>, prime256v1, secp384r1
+KEYTYPE="rsa4096"
 
-# RSA Key size in bits
+# RSA Key size in bits (deprecated, use rsa<BITS> instead)
 KEYBITS=4096
