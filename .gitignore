@@ -11,5 +11,6 @@ missing
 libcommon.sh
 acme-renew-all
 acme-renew-single
+acme-setup-account
 acme-setup-cert
 acme.conf

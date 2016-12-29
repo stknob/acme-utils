@@ -4,13 +4,15 @@ AUTOMAKE_OPTIONS = no-dist foreign
 sbin_SCRIPTS = \
 	acme-renew-single \
 	acme-renew-all \
-	acme-setup-cert
+	acme-setup-cert \
+	acme-setup-account
 
 CLEANFILES = \
 	libcommon.sh \
 	acme-renew-single \
 	acme-renew-all \
 	acme-setup-cert \
+	acme-setup-account \
 	acme.conf
 
 pkgdata_DATA = \
@@ -45,6 +47,10 @@ acme-renew-all: acme-renew-all.in Makefile
 acme-setup-cert: acme-setup-cert.in Makefile
 	$(do_subst) < $(srcdir)/acme-setup-cert.in > acme-setup-cert
 	chmod +x acme-setup-cert
+
+acme-setup-account: acme-setup-account.in Makefile
+	$(do_subst) < $(srcdir)/acme-setup-account.in > acme-setup-account
+	chmod +x acme-setup-account
 
 libcommon.sh: libcommon.sh.in Makefile
 	$(do_subst) < $(srcdir)/libcommon.sh.in > libcommon.sh

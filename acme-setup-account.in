@@ -1,0 +1,127 @@
+#!/bin/bash
+PATH="/usr/bin:/bin"
+CONFIG_FILE="@sysconfdir@/acme.conf"
+COMMON_FILE="@pkgdatadir@/libcommon.sh"
+
+[[ ${UID} -eq 0 ]] || {
+	echo "Must be root to run this application" >&2
+	exit 1
+}
+
+umask 077 || {
+	echo "Failed to lower umask setting" >&2
+	exit 1
+}
+
+shopt -s nocasematch || {
+	echo "Failed to enable nocasematch shell option" >&2
+	exit 1
+}
+
+source "${COMMON_FILE}" || {
+	echo "Failed to include shared function file" >&2
+	exit 1
+}
+
+#
+# Handle command-line arguments
+#
+
+ARGS=$(getopt -n '' -o 'c:h' -l 'config:,key-type:,help' -- "$@")
+[[ $? -eq 0 ]] || {
+	pr_error "Failed to parse arguments" >&2
+	exit 1
+}
+
+function print_usage() {
+	cat ->&2 <<-EOF
+		Usage:
+		        ${0} [options]
+		Options:
+		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
+		        --key-type	Key type, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+	EOF
+	exit 1
+}
+
+eval set -- "${ARGS}"
+while true ; do
+	case "${1}" in
+	-c|--config)
+		shift; CONFIG_FILE="${1}"; shift
+		;;
+	-h|--help)
+		print_usage; exit 1
+		;;
+	--key-type)
+		shift; OPT_KEYTYPE="${1}"; shift;
+		;;
+	--)	shift; break;
+		;;
+	esac
+done
+
+[[ -f "${CONFIG_FILE}" ]] || {
+	pr_error "Configuration file '${CONFIG_FILE}' not found"
+	exit 1
+}
+
+source "${CONFIG_FILE}" || {
+	pr_error "Configuration file '${CONFIG_FILE}' not readable"
+	exit 1
+}
+
+PREREQS=( "${OPENSSL}" )
+for x in ${PREREQS[@]}
+do
+	[[ -x "${x}" ]] || {
+		pr_error "Could not find required pre-requisite '${x}'"
+		exit 1
+	}
+done
+
+[[ -f "${ACCOUNT_KEY}" ]] && {
+	pr_info "Account key does exist, skipping"
+	exit 1
+}
+
+#
+# Validate and split key algo details
+#
+KEYINFO="$(acme_split_keytype "${OPT_KEYTYPE:-${KEYTYPE}}")"
+[[ $? -eq 0 && -n "${KEYINFO}" ]] || exit 1
+
+KEYALGO="$(cut -d' ' -f1 <<<"${KEYINFO}")"
+KEYTYPE="$(cut -d' ' -f2 <<<"${KEYINFO}")"
+KEYBITS="$(cut -d' ' -f3 <<<"${KEYINFO}")"
+
+case "${KEYALGO}" in
+rsa)
+	pr_info "Generating RSA Account key"
+	${OPENSSL} genrsa -out "${ACCOUNT_KEY}" ${KEYBITS} || {
+		pr_error "Failed to create RSA account key"
+		exit 1
+	}
+	;;
+ec)
+	pr_info "Generating ECDSA Account key"
+	${OPENSSL} ecparam -genkey -name ${KEYTYPE} -out "${ACCOUNT_KEY}" || {
+		pr_error "Failed to generate ECDSA account key"
+		exit 1
+	}
+	;;
+*)
+	pr_error ""
+	exit 1
+	;;
+esac
+
+chmod 0640 "${ACCOUNT_KEY}" || {
+	pr_error "Failed to set secure account key permissions"
+	exit 1
+}
+
+chown "root:${ACME_GROUP}" "${ACCOUNT_KEY}" || {
+	pr_error "Failed to set secure account key permissions"
+	exit 1
+}
