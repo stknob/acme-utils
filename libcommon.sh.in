@@ -205,12 +205,23 @@ function acme_check_domain_cert() {
 
 	CERT_NAME="$(basename "${crtfile}")"
 
-	# Get current issuer
-	ISSUER="$(${OPENSSL} x509 -noout -issuer -in "${crtfile}")"
+	ISSUER="$(${OPENSSL} x509 -noout -issuer -in "${crtfile}" | sed -e 's:^issuer= *::')"
 	[[ $? -eq 0 ]] || {
 		#pr_info "Failed to load certificate '${crtfile}', skipping"
 		return 1
 	}
+
+	SUBJECT="$(${OPENSSL} x509 -noout -subject -in "${crtfile}" | sed -e 's:^subject= *::')"
+	[[ $? -eq 0 ]] || {
+		#pr_info "Failed to load certificate '${crtfile}', skipping"
+		return 1
+	}
+
+	[[ "${SUBJECT}" == "${ISSUER}" ]] && {
+		pr_info "Certificate '${CERT_NAME}' is self-signed and will be force-renewed"
+		return 0
+	}
+
 	grep -q "/C=US/O=Let's Encrypt/" <<<"${ISSUER}" || {
 		#pr_info "Certificate '${CERT_NAME}' not signed by letsencrypt CA, skipping"
 		return 1
