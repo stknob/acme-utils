@@ -14,22 +14,80 @@ source "${COMMON_FILE}" || {
 	exit 1
 }
 
-source "${CONFIG_FILE}" || {
-	pr_error "Configuration file '${CONFIG_FILE}' not readable"
-	exit 1
-}
-
-[[ ${UID} -eq $(id -u "${ACME_USER}") ]] || {
-	pr_error "This script needs to run as '${ACME_USER}'!"
-	exit 1
-}
-
 [[ -f "${ACME_TINY_PY}" ]] || {
 	pr_error "Could not find 'acme_tiny.py' ACME client in '@pkgdatadir@'"
 	exit 1
 }
 
-PREREQS=( "${OPENSSL}" "${WGET}" )
+#
+# Handle command-line arguments
+#
+ARGS="$(getopt -n '' -o 'c:h' -l 'config:,help,pre-hook:,renew-hook:,post-hook:' -- "$@")"
+[[ $? -eq 0 ]] || {
+	pr_error "Failed to parse arguments" >&2
+	exit 1
+}
+
+function print_usage() {
+	cat ->&2 <<-EOF
+		Usage:
+		        ${0} [options]
+		Options:
+		        -c|--config FILE   Alternative config file path (default: ${CONFIG_FILE})
+		        --pre-hook PATH    Command/script run before renewing certificates
+		        --renew-hook PATH  Command/script invoked after each renewed certificate
+		        --post-hook PATH   Command/script run after all renewals have been completed
+	EOF
+	exit 1
+}
+
+RENEW_HOOK='' POST_HOOK=''
+eval set -- "${ARGS}"
+while true ; do
+	case "${1}" in
+	-c|--config)
+		shift; CONFIG_FILE="${1}"; shift
+		;;
+	-h|--help)
+		print_usage; exit 1
+		;;
+	--renew-hook)
+		shift; RENEW_HOOK="${1}"; shift
+		[[ -x "${RENEW_HOOK}" || -d "${RENEW_HOOK}" ]] || {
+			pr_error "Renew hook script or directory '${RENEW_HOOK}' is invalid"
+			exit 1
+		}
+		;;
+	--pre-hook)
+		shift; PRE_HOOK="${1}"; shift
+		[[ -x "${PRE_HOOK}" || -d "${PRE_HOOK}" ]] || {
+			pr_error "Pre hook script or directory '${PRE_HOOK}' is invalid"
+			exit 1
+		}
+		;;
+	--post-hook)
+		shift; POST_HOOK="${1}"; shift
+		[[ -x "${POST_HOOK}" || -d "${POST_HOOK}" ]] || {
+			pr_error "Post hook script or directory '${POST_HOOK}' is invalid"
+			exit 1
+		}
+		;;
+	--)	shift; break;
+		;;
+	esac
+done
+
+[[ -f "${CONFIG_FILE}" ]] || {
+	pr_error "Configuration file '${CONFIG_FILE}' not found"
+	exit 1
+}
+
+source "${CONFIG_FILE}" || {
+	pr_error "Configuration file '${CONFIG_FILE}' not readable"
+	exit 1
+}
+
+PREREQS=( "${OPENSSL}" "${WGET}" "${SU}" )
 for x in ${PREREQS[@]}
 do
 	[[ -x "${x}" ]] || {
@@ -83,6 +141,38 @@ done <<<"${FILES}"
 	exit 1
 }
 
+# Run pre-hook scripts
+if [[ -n "${PRE_HOOK}" ]]
+then
+	HOOK_SCRIPTS=''
+	if   [[ -d "${PRE_HOOK}" ]]; then
+		HOOK_SCRIPTS="$(find "${PRE_HOOK}" -type f -executable -name "*.sh" | sort)"
+	elif [[ -x "${PRE_HOOK}" ]]; then
+		HOOK_SCRIPTS="${PRE_HOOK}"
+	fi
+
+	while read fn; do
+		[[ -x "${fn}" ]] || continue
+		(env - "${fn}") || {
+			pr_error "Failed to execute pre hook script '${fn}'"
+			exit 1
+		}
+	done <<<"${HOOK_SCRIPTS}"
+fi
+
+# Prepare renew-hook
+HOOK_SCRIPTS=''
+if [[ -n "${RENEW_HOOK}" ]]
+then
+	if   [[ -d "${RENEW_HOOK}" ]]; then
+		HOOK_SCRIPTS="$(find "${RENEW_HOOK}" -type f -executable -name "*.sh" | sort)"
+	elif [[ -x "${RENEW_HOOK}" ]]; then
+		HOOK_SCRIPTS="${RENEW_HOOK}"
+	fi
+fi
+
+RENEWED_DOMAINS=()
+RENEWED_CERTS=()
 for fn in ${CERTIFICATES[@]}
 do
 	CERT_NAME="${fn}"
@@ -93,6 +183,11 @@ do
 		continue
 	}
 
+	CERT_DOMAINS="$(acme_get_csr_names "${CERT_DIR}/${CERT_BASE}.csr")"
+	[[ -n "${CERT_DOMAINS}" ]] || {
+		(( FAILED++ ))
+		continue
+	}
 	acme_handle_domain_cert "${CERT_DIR}/${CERT_BASE}.csr" "${CERT_DIR}/${CERT_BASE}.crt" || {
 		(( FAILED++ ))
 		continue
@@ -103,10 +198,44 @@ do
 		continue
 	}
 
+	RENEWED_DOMAINS+=( ${CERT_DOMAINS} )
+	RENEWED_CERTS+=( "${CERT_DIR}/${CERT_BASE}.crt" )
+
+	# Run renew-hook scripts
+	if [[ -n "${RENEW_HOOK}" ]]
+	then
+		while read fn; do
+			[[ -x "${fn}" ]] || continue
+			(env - CERT_FILENAME="${CERT_DIR}/${CERT_BASE}.crt" ISSUER_FILENAME="${CERT_DIR}/${CERT_BASE}.ca-bundle" "${fn}") || {
+				pr_error "Failed to execute renewal hook script '${fn}'"
+				exit 1
+			}
+		done <<<"${HOOK_SCRIPTS}"
+	fi
+
 	(( UPDATED++ ))
 done
 
 pr_info "Found: ${#CERTIFICATES[@]}, Updated: ${UPDATED}, Skipped: ${SKIPPED}, Failed: ${FAILED}"
 
-# Exitcode 0 indicates a least one cert has been updated, reload http server
-[[ ${UPDATED} -gt 0 ]]; exit $?
+# Run post-hook scripts
+if [[ -n "${POST_HOOK}" && "${UPDATED}" -gt 0 ]]
+then
+	HOOK_SCRIPTS=''
+	if   [[ -d "${POST_HOOK}" ]]; then
+		HOOK_SCRIPTS="$(find "${POST_HOOK}" -type f -executable -name "*.sh" | sort)"
+	elif [[ -x "${POST_HOOK}" ]]; then
+		HOOK_SCRIPTS="${POST_HOOK}"
+	fi
+
+	while read fn; do
+		[[ -x "${fn}" ]] || continue
+		(env - CERTS_RENEWED="${RENEWED_CERTS[@]}" DOMAINS_RENEWED="${RENEWED_DOMAINS[@]}" "${fn}") || {
+			pr_error "Failed to execute post hook script '${fn}'"
+			exit 1
+		}
+	done <<<"${HOOK_SCRIPTS}"
+fi
+
+# Set proper exit code
+exit [[ ${FAILED} -eq 0 ]]
