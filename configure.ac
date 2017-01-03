@@ -46,6 +46,9 @@ AS_IF([test "x${DIG}" = "x"], [AC_MSG_ERROR([dig not found])])
 AC_PATH_PROG([SETFACL], [setfacl])
 AS_IF([test "x${SETFACL}" = "x"], [AC_MSG_ERROR([setfacl not found])])
 
+AC_PATH_PROG([SU], [su])
+AS_IF([test "x${SU}" = "x"], [AC_MSG_ERROR([su not found])])
+
 # Generate output files
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

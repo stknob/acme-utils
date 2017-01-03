@@ -19,8 +19,8 @@ source "${CONFIG_FILE}" || {
 	exit 1
 }
 
-[[ ${UID} -eq $(id -u "${ACME_USER}") ]] || {
-	pr_error "This script needs to run as '${ACME_USER}'!"
+[[ ${UID} -eq 0 ]] || {
+	pr_error "Must be root to run this application"
 	exit 1
 }
 

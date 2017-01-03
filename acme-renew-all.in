@@ -9,8 +9,8 @@ source "${COMMON_FILE}" || {
 	exit 1
 }
 
-[[ -f "${CONFIG_FILE}" ]] || {
-	pr_error "Configuration file '${CONFIG_FILE}' not found"
+[[ ${UID} -eq 0 ]] || {
+	pr_error "Must be root to run this application"
 	exit 1
 }
 

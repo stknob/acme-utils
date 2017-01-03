@@ -26,6 +26,7 @@ do_subst = sed  -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
 		-e 's,[@]sysconfdir[@],$(sysconfdir),g' \
 		-e 's,[@]challengedir[@],$(challengedir),g' \
 		-e 's,[@]certdir[@],$(certdir),g' \
+		-e 's,[@]SU[@],$(SU),g' \
 		-e 's,[@]DIG[@],$(DIG),g' \
 		-e 's,[@]WGET[@],$(WGET),g' \
 		-e 's,[@]PWGEN[@],$(PWGEN),g' \

@@ -10,8 +10,9 @@ SETFACL="@SETFACL@"
 PWGEN="@PWGEN@"
 WGET="@WGET@"
 DIG="@DIG@"
+SU="@SU@"
 
-# Dedicated user and group for fetch/renew operations
+# Dedicated user and group for fetch/renew remote operations
 ACME_USER="acme"
 ACME_GROUP="acme"
 
@@ -60,6 +61,11 @@ function pr_error() {
 function pr_fatal() {
 	echo -e "FATAL: ${*}" >&2
 	exit 1
+}
+
+function acme_secure_exec() {
+	su "${ACME_USER}" -- ${@}
+	return $?
 }
 
 function acme_has() {
@@ -181,7 +187,7 @@ function acme_get_issuer_cert() {
 	ISSUER_URL="$(acme_get_issuer_cert_url "${crtfile}")"
 	[[ -n "${ISSUER_URL}" ]] || return 1
 
-	ISSUER_RESPONSE="$(${WGET} -q "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
+	ISSUER_RESPONSE="$(acme_secure_exec ${WGET} -q "${ISSUER_URL}" -O - | ${OPENSSL} x509 -text -inform DER -outform PEM 2>/dev/null)"
 	[[ -n "${ISSUER_RESPONSE}" ]] || {
 		pr_error "Failed to renew certificate chain certificate from '${ISSUER_URL}'"
 		return 1
@@ -258,7 +264,7 @@ function acme_handle_domain_cert() {
 	CERT_NAME="$(basename "${outfile}")"
 
 	pr_info "Renewing '${CERT_NAME}' certificate..."
-	CERT_RESPONSE="$(${PYTHON} "${ACME_TINY_PY}" \
+	CERT_RESPONSE="$(acme_secure_exec "${PYTHON}" "${ACME_TINY_PY}" \
 		--csr "${csrfile}" \
 		--account-key "${ACCOUNT_KEY}" \
 		--acme-dir "${CHALLENGE_DIR}")"
