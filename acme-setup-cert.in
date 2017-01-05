@@ -211,35 +211,25 @@ fi
 # Backup key name
 BACKUP_NAME="hpkp-backup-${CERT_NAME}"
 
-# Deduplicate names and set primary
-PRIMARY="${NAMES_LIST[0]}"
-SUBJECTS=()
+# Get primary hostname and build CSR subject
+CSR_PRIMARY="${NAMES_LIST[0]}"
+CSR_SUBJECT="/CN=${CSR_PRIMARY}"
+# Make primary the first in list
+CSR_ALTNAMES=( "DNS:${CSR_PRIMARY}" )
+
+# Remove any duplicates and append remaining
+# non-primary entries
+CSR_HOSTNAMES="$(IFS=$'\n' ; sort -u <<<"${NAMES_LIST[*]}")"
 if [[ ${#NAMES_LIST[@]} -gt 1 ]]
 then
-	# Remove duplicate names from list
-	TMP="$(tr ' ' '\n' <<<"${NAMES_LIST[*]}" | sort -u)"
 	while read fn; do
-		SUBJECTS+=( "DNS:${fn}" )
-	done <<<"${TMP}"
-else
-	# Single entry, no deduplication needed
-	SUBJECTS+=( "DNS:${PRIMARY}" )
+		[[ "${fn}" == "${CSR_PRIMARY}" ]] ||\
+			CSR_ALTNAMES+=( "DNS:${fn}" )
+	done <<<"${CSR_HOSTNAMES}"
 fi
 
-# Convert final list into hostnames
-HOSTNAMES="$(tr ' ' '\n' <<<"${SUBJECTS[@]}" | sed -e 's#^DNS:##')"
-
-#
-# Create temporary file and register cleanup func
-#
-TMPFILE="$(mktemp)"
-[[ $? -eq 0 ]] || {
-	pr_error "Failed to generate sign request"
-	exit 1
-}
-
-CLEANUP_FILES=( "${TMPFILE}" )
-
+# Register file cleanup func
+CLEANUP_FILES=( )
 function cleanup() {
 	#pr_info "Cleaning up files..."
 	for fn in ${CLEANUP_FILES[@]}; do
@@ -250,6 +240,8 @@ function cleanup() {
 
 trap cleanup EXIT INT KILL
 
+
+#
 if [[ ${NO_CHECKS} -eq 0 ]]
 then
 	#
@@ -280,7 +272,7 @@ then
 		exit 1
 	}
 
-	CHECKED=0 FAILED=0 TOTAL=${#SUBJECTS[@]}
+	CHECKED=0 FAILED=0 TOTAL=${#CSR_ALTNAMES[@]}
 	pr_info "Checking ${TOTAL} name(s) for reachability..."
 	while read fn
 	do
@@ -312,7 +304,7 @@ then
 
 		pr_echo "\t${CGREEN}OK${CRESET}: ${HOSTNAME} successfully verified\n"
 
-	done <<<"${HOSTNAMES}"
+	done <<<"${CSR_HOSTNAMES}"
 
 	[[ ${FAILED} -eq 0 ]] || {
 		pr_error "Some of the certificate subject names could not be verified, aborting!"
@@ -320,22 +312,56 @@ then
 	}
 fi
 
+
 #
 # Convert hostnames to alternative subject list
 # and create temporary openssl config
 #
-SIGNOPTS=""
-SAN="$(echo -n "${SUBJECTS[@]}" | tr ' ' ',')"
+SAN="$(awk -v RS=' ' -v FS=':' '/^DNS:/{ printf "DNS.%u = %s\n", ++cnt, $2 }' <<<"${CSR_ALTNAMES[@]}")"
 [[ -n "${SAN}" ]] || {
 	pr_error "Failed to generate subjectAltNames list"
 	exit 1
 }
-cat /etc/ssl/openssl.cnf >"${TMPFILE}" || {
-	pr_error "Failed to generate temporary openssl config"
+
+CONF_TEMPFILE="$(mktemp)"
+[[ $? -eq 0 && -f "${CONF_TEMPFILE}" ]] || {
+	pr_error "Failed to create temporary openssl config"
 	exit 1
 }
-SIGNOPTS="-extensions SAN"
-printf '[SAN]\nsubjectAltName=%s\n' "${SAN}" >>"${TMPFILE}" || {
+
+CLEANUP_FILES+=( "${CONF_TEMPFILE}" )
+
+# Create minimal openssl config file
+cat ->"${CONF_TEMPFILE}" <<-EOF
+[ req ]
+default_md         = sha256
+distinguished_name = req_distinguished_name
+x509_extensions    = v3_cert
+req_extensions     = v3_req
+string_mask        = utf8only
+
+[ req_distinguished_name ]
+commonName     = Common Name (e.g. server FQDN or YOUR name)
+commonName_max = 64
+
+emailAddress     = Email Address
+emailAddress_max = 64
+
+[ v3_cert ]
+basicConstraints = CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+nsComment = "OpenSSL Generated Certificate"
+subjectAltName = @altnames
+
+[ v3_req ]
+subjectAltName = @altnames
+
+[ altnames ]
+${SAN}
+
+EOF
+[[ $? -eq 0 ]] || {
 	pr_error "Failed to generate temporary openssl config"
 	exit 1
 }
@@ -404,14 +430,14 @@ fi
 REGEN_DOMAIN_CSR=0
 if [[ -f "${CERT_DIR}/${CERT_NAME}.csr" ]]
 then
-	CSR_NAMES="$(acme_get_csr_names "${CERT_DIR}/${CERT_NAME}.csr")"
-	[[ -n "${CSR_NAMES}" ]] || {
+	CSR_OLDNAMES="$(acme_get_csr_names "${CERT_DIR}/${CERT_NAME}.csr")"
+	[[ -n "${CSR_OLDNAMES}" ]] || {
 		pr_error "Failed to read CSR name entries"
 		exit 1
 	}
 
-	new="$(sort -u <<<"${HOSTNAMES}" | tr -d '\n' | md5sum -)"
-	cur="$(sort -u <<<"${CSR_NAMES}" | tr -d '\n' | md5sum -)"
+	new="$(sort -u <<<"${CSR_HOSTNAMES}" | tr -d '\n' | md5sum -)"
+	cur="$(sort -u <<<"${CSR_OLDNAMES}" | tr -d '\n' | md5sum -)"
 
 	if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]; then
 		pr_info "Domain keys have been replaced, need to regenerate sign request"
@@ -438,12 +464,11 @@ then
 	# and (optional) our list of alternative subject names
 	#
 	pr_info "Generating new sign request..."
-	${OPENSSL} req -new -sha256 \
-		-key  "${CERT_DIR}/${CERT_NAME}.key" \
+	${OPENSSL} req -new -batch \
+		-key "${CERT_DIR}/${CERT_NAME}.key" \
 		-out  "${CERT_DIR}/${CERT_NAME}.csr" \
-		-subj "/CN=${PRIMARY}" \
-		-reqexts SAN \
-		-config "${TMPFILE}" \
+		-subj "${CSR_SUBJECT}" \
+		-config "${CONF_TEMPFILE}" \
 		>/dev/null
 
 	[[ $? -eq 0 ]] || {
@@ -485,18 +510,17 @@ then
 	# Make the HTTP/-whatever daemon happy by generating an initial self-signed SSL cert
 	#
 	pr_info "Generating initial self-signed certificate (to make \$HTTP_SERVER happy)"
-	${OPENSSL} x509 \
-		-req -sha256 \
+	${OPENSSL} x509 -req \
 		-in "${CERT_DIR}/${CERT_NAME}.csr" \
 		-out "${CERT_DIR}/${CERT_NAME}.crt" \
 		-signkey "${CERT_DIR}/${CERT_NAME}.key" \
-		-extfile "${TMPFILE}" \
-		${SIGNOPTS} \
-		-days 10 \
+		-extfile "${CONF_TEMPFILE}" \
+		-extensions v3_cert \
+		-days 14 \
 		>/dev/null
 
 	[[ $? -eq 0 ]] || {
-		pr_error "Failed to self-sign initial certificate"
+		pr_error "Failed to create initial self-signed certificate"
 		exit 1
 	}
 
