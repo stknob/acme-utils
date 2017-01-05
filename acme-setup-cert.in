@@ -208,18 +208,6 @@ fi
 	exit 1
 }
 
-#
-# Check for existing files
-#
-#[ -f "${CERT_DIR}/${CERT_NAME}.crt" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
-#	pr_error "Certificate file found, not replacing existing file!"
-#	exit 1
-#}
-#[ -f "${CERT_DIR}/${CERT_NAME}.csr" -a ${REGEN_CSR} -eq 0 -a ${REGEN_ALL} -eq 0 ] && {
-#	pr_error "Certificate sign request found, not replacing existing file!"
-#	exit 1
-#}
-
 # Backup key name
 BACKUP_NAME="hpkp-backup-${CERT_NAME}"
 
