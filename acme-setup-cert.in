@@ -717,6 +717,10 @@ then
 		exit 1
 	}
 
+	HPKP_REPORT_URI="http://report.axsentis.net/hpkp-report.php"
+	HPKP_MAX_AGE="86400"
+	HSTS_MAX_AGE="15552000"
+
 	# Print configuration details
 	cat -<<-EOF
 
@@ -727,8 +731,8 @@ then
 	    SSLCertificateFile    ${CERT_DIR}/${CERT_NAME}.crt
 	    SSLCACertificateFile  ${CERT_DIR}/${CERT_NAME}.ca-bundle
 
-	    Header always set "Strict-Transport-Security" "max-age=15552000"
-	    Header always set "Public-Key-Pins" "pin-sha256=\"${MASTER_PIN}\"; pin-sha256=\"${BACKUP_PIN}\"; max-age=86400; report-uri=\"http://report.axsentis.net/hpkp-report.php\""
+	    Header always set "Strict-Transport-Security" "max-age=${HSTS_MAX_AGE}"
+	    Header always set "Public-Key-Pins" "pin-sha256=\"${MASTER_PIN}\"; pin-sha256=\"${BACKUP_PIN}\"; max-age=${HPKP_MAX_AGE}; report-uri=\"${HPKP_REPORT_URI}\""
 
 	EOF
 fi
