@@ -188,6 +188,14 @@ do
 		(( FAILED++ ))
 		continue
 	}
+
+	# Primary (non-alias) cert domain
+	CERT_HOSTNAME="$(cut -d' ' -f1 <<<"${CERT_DOMAINS}")"
+	[[ -n "${CERT_HOSTNAME}" ]] || {
+		(( FAILED++ ))
+		continue
+	}
+
 	acme_handle_domain_cert "${CERT_DIR}/${CERT_BASE}.csr" "${CERT_DIR}/${CERT_BASE}.crt" || {
 		(( FAILED++ ))
 		continue
@@ -206,7 +214,8 @@ do
 	then
 		while read fn; do
 			[[ -x "${fn}" ]] || continue
-			(env - CERT_FILENAME="${CERT_DIR}/${CERT_BASE}.crt" ISSUER_FILENAME="${CERT_DIR}/${CERT_BASE}.ca-bundle" "${fn}") || {
+			(env - CERT_FILENAME="${CERT_DIR}/${CERT_BASE}.crt" CERT_HOSTNAME="${CERT_HOSTNAME}" \
+				CERT_DOMAINS="${CERT_DOMAINS}" ISSUER_FILENAME="${CERT_DIR}/${CERT_BASE}.ca-bundle" "${fn}") || {
 				pr_error "Failed to execute renewal hook script '${fn}'"
 				exit 1
 			}
