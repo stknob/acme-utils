@@ -259,16 +259,16 @@ then
 		exit 1
 	}
 
-	CHECKFILE="${CHALLENGE_DIR}/${CHECKNAME}"
-	echo "${SIGNATURE}" >"${CHECKFILE}" || {
-		pr_error "Failed to update '${CHECKFILE}', aborting"
+	CHECK_TEMPFILE="$(mktemp -p "${CHALLENGE_DIR}")"
+	[[ $? -eq 0 && -f "${CHECK_TEMPFILE}" ]] || {
+		pr_error "Failed to create temporary check file, aborting"
 		exit 1
 	}
 
-	CLEANUP_FILES+=( "${CHECKFILE}" )
+	CLEANUP_FILES+=( "${CHECK_TEMPFILE}" "${CHALLENGE_DIR}/${CHECKNAME}" )
 
-	chmod 644 "${CHECKFILE}" || {
-		pr_error "Failed to update '${CHECKFILE}' permissions, aborting"
+	install -m 644 "${CHECK_TEMPFILE}" "${CHALLENGE_DIR}/${CHECKNAME}" || {
+		pr_error "Failed to update '${CHECKNAME}', aborting"
 		exit 1
 	}
 
@@ -386,16 +386,24 @@ fi
 
 if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]
 then
+	DKEY_TEMPFILE="$(mktemp)"
+	[[ $? -eq 0 && -f "${DKEY_TEMPFILE}" ]] || {
+		pr_error "Failed to create temporary openssl config"
+		exit 1
+	}
+
+	CLEANUP_FILES+=( "${DKEY_TEMPFILE}" )
+
 	pr_info "Generating new domain key..."
 	case "${KEYALGO}" in
 	rsa)
-		${OPENSSL} genrsa -out "${CERT_DIR}/${CERT_NAME}.key" ${KEYBITS} || {
+		${OPENSSL} genrsa -out "${DKEY_TEMPFILE}" ${KEYBITS} >/dev/null || {
 			pr_error "Failed to generate RSA domain key"
 			exit 1
 		}
 		;;
 	ec)
-		${OPENSSL} ecparam -genkey -name ${KEYTYPE} -out "${CERT_DIR}/${CERT_NAME}.key" || {
+		${OPENSSL} ecparam -genkey -name ${KEYTYPE} -out "${DKEY_TEMPFILE}" >/dev/null || {
 			pr_error "Failed to generate ECDSA domain key"
 			exit 1
 		}
@@ -406,22 +414,20 @@ then
 		;;
 	esac
 
-	chmod 400 "${CERT_DIR}/${CERT_NAME}.key" || {
-		pr_error "Failed to set domain key permissions"
+	install -m 400 "${DKEY_TEMPFILE}" "${CERT_DIR}/${CERT_NAME}.key" || {
+		pr_error "Failed to install domain key"
 		exit 1
 	}
 
-	pr_info "Generating new sha256 pin file for domain key..."
-	${OPENSSL} pkey -in "${CERT_DIR}/${CERT_NAME}.key" -outform der -pubout |\
-		${OPENSSL} dgst -sha256 -binary |\
-		base64 > "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" \
-	|| {
+	pr_info "Generating new SHA-256 pin file for domain key..."
+	${OPENSSL} pkey -in "${CERT_DIR}/${CERT_NAME}.key" -outform DER -pubout |\
+		${OPENSSL} dgst -sha256 -binary | base64 > "${DKEY_TEMPFILE}" || {
 		pr_error "Failed to generate domain key pin file"
 		exit 1
 	}
 
-	chmod 644 "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" || {
-		pr_error "Failed to set domain key pin file permissions"
+	install -m 644 "${DKEY_TEMPFILE}" "${CERT_DIR}/${CERT_NAME}.key.pin-sha256" || {
+		pr_error "Failed to install domain key pin file"
 		exit 1
 	}
 fi
@@ -459,6 +465,14 @@ fi
 
 if [[ ${REGEN_DOMAIN_CSR} -eq 1 ]]
 then
+	CSR_TEMPFILE="$(mktemp)"
+	[[ $? -eq 0 && -f "${CSR_TEMPFILE}" ]] || {
+		pr_error "Failed to create domain csr tempfile"
+		exit 1
+	}
+
+	CLEANUP_FILES+=( "${CSR_TEMPFILE}" )
+
 	#
 	# Generate a sign request using the temporary configuration file
 	# and (optional) our list of alternative subject names
@@ -466,7 +480,7 @@ then
 	pr_info "Generating new sign request..."
 	${OPENSSL} req -new -batch \
 		-key "${CERT_DIR}/${CERT_NAME}.key" \
-		-out  "${CERT_DIR}/${CERT_NAME}.csr" \
+		-out "${CSR_TEMPFILE}" \
 		-subj "${CSR_SUBJECT}" \
 		-config "${CONF_TEMPFILE}" \
 		>/dev/null
@@ -476,11 +490,8 @@ then
 		exit 1
 	}
 
-	#
-	# Use ACLs to give letsencrypt user account access to certificate files
-	#
-	${SETFACL} -m "user:${ACME_USER}:r" "${CERT_DIR}/${CERT_NAME}.csr" || {
-		pr_error "Failed to give ${ACME_USER} read permission on sign request"
+	install -m 644 "${CSR_TEMPFILE}" "${CERT_DIR}/${CERT_NAME}.csr" || {
+		pr_error "Failed to install sign request file"
 		exit 1
 	}
 fi
@@ -506,14 +517,22 @@ fi
 
 if [[ ${REGEN_DOMAIN_CERT} -eq 1 ]]
 then
+	CERT_TEMPFILE="$(mktemp)"
+	[[ $? -eq 0 && -f "${CERT_TEMPFILE}" ]] || {
+		pr_error "Failed to create domain cert tempfile"
+		exit 1
+	}
+
+	CLEANUP_FILES+=( "${CERT_TEMPFILE}" )
+
 	#
 	# Make the HTTP/-whatever daemon happy by generating an initial self-signed SSL cert
 	#
 	pr_info "Generating initial self-signed certificate (to make \$HTTP_SERVER happy)"
 	${OPENSSL} x509 -req \
 		-in "${CERT_DIR}/${CERT_NAME}.csr" \
-		-out "${CERT_DIR}/${CERT_NAME}.crt" \
 		-signkey "${CERT_DIR}/${CERT_NAME}.key" \
+		-out "${CERT_TEMPFILE}" \
 		-extfile "${CONF_TEMPFILE}" \
 		-extensions v3_cert \
 		-days 14 \
@@ -524,19 +543,14 @@ then
 		exit 1
 	}
 
-	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.crt" || {
-		pr_error "Failed to give ${ACME_USER} read/write permission on certificate"
+	install -m 600 "${CERT_TEMPFILE}" "${CERT_DIR}/${CERT_NAME}.crt" || {
+		pr_error "Failed to install self-signed initial certificate"
 		exit 1
 	}
 
 	pr_info "Generating temporary ca chain file..."
-	cat "${CERT_DIR}/${CERT_NAME}.crt" >"${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
+	install -m 644 "${CERT_TEMPFILE}" "${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
 		pr_error "Failed to create temporary ca chain file"
-		exit 1
-	}
-
-	${SETFACL} -m "user:${ACME_USER}:rw" "${CERT_DIR}/${CERT_NAME}.ca-bundle" || {
-		pr_error "Failed to give ${ACME_USER} read/write permission on chain file"
 		exit 1
 	}
 fi
@@ -615,10 +629,18 @@ then
 		;;
 	esac
 
+	BACKUP_TEMPFILE="$(mktemp)"
+	[[ $? -eq 0 && -f "${BACKUP_TEMPFILE}" ]] || {
+		pr_error "Failed to create backup domain key tempfile"
+		exit 1
+	}
+
+	CLEANUP_FILES+=( "${BACKUP_TEMPFILE}" )
+
 	pr_info "Generating new backup domain key..."
 	case "${KEYALGO}" in
 	rsa)
-		${OPENSSL} genrsa -aes256 -passout stdin -out "${CERT_DIR}/${BACKUP_NAME}.key" ${KEYBITS} <<-EOF
+		${OPENSSL} genrsa -aes256 -passout stdin -out "${BACKUP_TEMPFILE}" ${KEYBITS} <<-EOF
 			${BACKUP_PASS}
 		EOF
 		[[ $? -eq 0 ]] || {
@@ -627,7 +649,7 @@ then
 		}
 		;;
 	ec)
-		${OPENSSL} ecparam -genkey -name ${KEYTYPE} | ${OPENSSL} pkey -aes256 -passout fd:3 -out "${CERT_DIR}/${BACKUP_NAME}.key"  3<<-EOF
+		${OPENSSL} ecparam -genkey -name ${KEYTYPE} | ${OPENSSL} pkey -aes256 -passout fd:3 -out "${BACKUP_TEMPFILE}" 3<<-EOF
 			${BACKUP_PASS}
 		EOF
 		[[ $? -eq 0 ]] || {
@@ -641,14 +663,14 @@ then
 		;;
 	esac
 
-	chmod 400 "${CERT_DIR}/${BACKUP_NAME}.key" || {
-		pr_error "Failed to set backup domain key permissions"
+	install -m 400 "${BACKUP_TEMPFILE}" "${CERT_DIR}/${BACKUP_NAME}.key" || {
+		pr_error "Failed to install backup domain key file"
 		exit 1
 	}
 
-	pr_info "Generating new sha256 pin file for backup domain key..."
+	pr_info "Generating new SHA-256 pin file for backup domain key..."
 	( ${OPENSSL} pkey -in "${CERT_DIR}/${BACKUP_NAME}.key" -outform der -pubout -passin stdin |\
-		${OPENSSL} dgst -sha256 -binary | base64 >"${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256"; ) <<-EOF
+		${OPENSSL} dgst -sha256 -binary | base64 >"${BACKUP_TEMPFILE}"; ) <<-EOF
 		${BACKUP_PASS}
 	EOF
 	[[ $? -eq 0 ]] || {
@@ -656,8 +678,8 @@ then
 		exit 1
 	}
 
-	chmod 644 "${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256" || {
-		pr_error "Failed to set backup domain key pin file permissions"
+	install -m 644 "${BACKUP_TEMPFILE}" "${CERT_DIR}/${BACKUP_NAME}.key.pin-sha256" || {
+		pr_error "Failed to install backup domain key pin file"
 		exit 1
 	}
 

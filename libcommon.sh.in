@@ -6,7 +6,6 @@ NO_OUTPUT=0
 # Path to external tools
 PYTHON="@PYTHON@"
 OPENSSL="@OPENSSL@"
-SETFACL="@SETFACL@"
 PWGEN="@PWGEN@"
 WGET="@WGET@"
 DIG="@DIG@"
