@@ -501,7 +501,7 @@ fi
 # NOTE: REGEN_DOMAIN_KEY = REGEN_ALL
 #
 REGEN_DOMAIN_CERT=0
-if [[ -n "${CERT_DIR}/${CERT_NAME}.crt" ]]
+if [[ -f "${CERT_DIR}/${CERT_NAME}.crt" ]]
 then
 	if [[ ${REGEN_DOMAIN_KEY} -eq 1 ]]; then
 		pr_info "Domain key has been replaced, need to generate a new temporary certificate"
