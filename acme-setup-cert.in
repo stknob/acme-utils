@@ -162,8 +162,7 @@ then
 	while read LINE; do
 		(( LINE_NR++ ))
 		# skip comment and empty lines
-		[[ -z "${LINE}" ]] && continue
-		[[ "${LINE}" =~ ^# ]] && continue
+		[[ -z "${LINE}" || "${LINE}" =~ ^# ]] && continue
 		[[ "${LINE}" =~ ${DOMAIN_REGEX} ]] || {
 			pr_error "Domain file '${NAMES_FILE}' contains invalid entry on line ${LINE_NR}: ${LINE}"
 			exit 1
