@@ -39,7 +39,13 @@ function print_usage() {
 		        ${0} [options]
 		Options:
 		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
-		        --key-type	Key type, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+
+		        --key-type=TYPE
+
+		          Type of key to create, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+		          to either create an RSA key of size 'BITS' (2048, 3072 or 4096), or
+		          an EC key of 256 or 384 bits. (default: ${KEYTYPE})
+
 	EOF
 	exit 1
 }

@@ -33,10 +33,28 @@ function print_usage() {
 		Usage:
 		        ${0} [options]
 		Options:
-		        -c|--config FILE   Alternative config file path (default: ${CONFIG_FILE})
-		        --pre-hook PATH    Command/script run before renewing certificates
-		        --renew-hook PATH  Command/script invoked after each renewed certificate
-		        --post-hook PATH   Command/script run after all renewals have been completed
+		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
+
+		        --pre-hook=PATH
+
+		                        Command/script run before renewing certificates.
+
+		        --renew-hook=PATH
+
+		                        Command/script invoked after renewing a certificate.
+		                        Environment variables:
+		                          ISSUER_FILENAME - Full path to the issuer certificate
+		                          CERT_FILENAME   - Full path of the certificate file
+		                          CERT_HOSTNAME   - The "primary" name (subject CommonName) of the certificate
+		                          CERT_DOMAINS    - Space-separated list of all subject-/AltNames
+
+		        --post-hook=PATH
+
+		                        Command/script run after all renewals have been completed.
+		                        Environment variables:
+		                          CERTS_RENEWED   - Space-separated list of renewed certificates
+		                          DOMAINS_RENEWED - Space-separated list of renewed subjectAltNames
+
 	EOF
 	exit 1
 }
