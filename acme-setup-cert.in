@@ -27,7 +27,7 @@ source "${COMMON_FILE}" || {
 # Handle command-line arguments
 #
 
-ARGS=$(getopt -n '' -o 'c:f:n:hq' -l 'config:,file:,name:,replace-csr,replace-all,help,key-type:,backup-pass:,quiet,skip-checks' -- "$@")
+ARGS=$(getopt -n '' -o 'c:f:n:hq' -l 'config:,file:,name:,replace-csr,replace-all,help,key-type:,backup-pass:,quiet,skip-checks,create-hook:' -- "$@")
 [[ $? -eq 0 ]] || {
 	pr_error "Failed to parse arguments" >&2
 	exit 1
@@ -42,24 +42,42 @@ function print_usage() {
 		        -n|--name	Name prefix of generated files (default: first DNS name in list)
 		        -c|--config	Alternative config file path (default: ${CONFIG_FILE})
 		        -q|--quiet      Do not output result message
-		        --replace-all   Overwrite existing key files (domain and backup key), csr and certificate
-		        --replace-csr	Overwrite existing sign request file
 
-		        --skip-checks   Do not perform CSR hostname checks
+		        --replace-all   Overwrite existing key files (domain and backup key),
+		                        sign-request (.csr) and certificate (.crt)
 
-		        --key-type	Key type, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+		        --replace-csr	Overwrite existing sign-request (.csr) file
 
-		        --backup-pass	Backup key password, either password or
-		                          'fd:ID' to read from file handle
-		                          'file:PATH' to read from file
-		                          'env:VARNAME' to read from an environment variable
+		        --skip-checks	Do not perform hostname checks
+
+		        --key-type=TYPE
+
+		                        Type of key to create, one of: 'rsa<BITS>', 'prime256v1', 'secp384r1'
+		                        to either create an RSA key of size 'BITS' (2048, 3072 or 4096),
+		                        or an EC key of 256 or 384 bits. (default: ${KEYTYPE})
+
+		        --backup-pass=ARG
+
+		                        Backup key password, either the password (insecure) or
+		                          'fd:ID' to read from file handle, e.g. 'fd:2' to read from stderr
+		                          'file:PATH' to read the password from the file at 'PATH'
+		                          'env:VARNAME' to read get the password from the environment variable 'VARNAME'
+
+		        --create-hook=PATH
+
+		                        Command/script invoked after creating certificate.
+		                        Environment variables:
+		                          CERT_FILENAME - Full path of the certificate file
+		                          CERT_HOSTNAME - The "primary" name (subject CommonName) of the certificate
+		                          CERT_DOMAINS  - Space-separated list of all subject-/AltNames
+
 	EOF
 	exit 1
 }
 
 eval set -- "${ARGS}"
 REGEN_ALL=0 REGEN_CSR=0 NO_CHECKS=0
-NAMES_FILE="" CERT_NAME=""
+NAMES_FILE='' CERT_NAME='' CREATE_HOOK=''
 NAMES_LIST=()
 while true ; do
 	case "${1}" in
@@ -74,6 +92,13 @@ while true ; do
 		;;
 	-q|--quiet)
 		shift; NO_OUTPUT=1
+		;;
+	--create-hook)
+		shift; CREATE_HOOK="${1}"; shift
+		[[ -x "${CREATE_HOOK}" || -d "${CREATE_HOOK}" ]] || {
+			pr_error "Create hook script or directory '${CREATE_HOOK}' is invalid"
+			exit 1
+		}
 		;;
 	--skip-checks)
 		shift; NO_CHECKS=1
@@ -553,6 +578,27 @@ then
 		pr_error "Failed to create temporary ca chain file"
 		exit 1
 	}
+
+	# Run create-hook scripts
+	if [[ -n "${CREATE_HOOK}" ]]
+	then
+		HOOK_SCRIPTS=''
+		if   [[ -d "${CREATE_HOOK}" ]]; then
+			HOOK_SCRIPTS="$(find "${CREATE_HOOK}" -type f -executable -name "*.sh" | sort)"
+		elif [[ -x "${CREATE_HOOK}" ]]; then
+			HOOK_SCRIPTS="${CREATE_HOOK}"
+		fi
+
+		pr_info "Running create hook scripts for self-signed certificate..."
+		while read fn; do
+			[[ -x "${fn}" ]] || continue
+			(env - CERT_FILENAME="${CERT_DIR}/${CERT_NAME}.crt" CERT_HOSTNAME="${CSR_PRIMARY}" \
+				CERT_DOMAINS="$(tr -d 'DNS:' <<<"${CSR_ALTNAMES[@]}")" "${fn}") || {
+				pr_error "Failed to execute create hook script '${fn}'"
+				exit 1
+			}
+		done <<<"${HOOK_SCRIPTS}"
+	fi
 fi
 
 
