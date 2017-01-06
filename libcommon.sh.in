@@ -70,7 +70,7 @@ function acme_secure_exec() {
 function acme_has() {
 	local val="${1}"
 	[[ -n "${val}" ]] || {
-		pr_echo "Usage: $0 <val> <item1...itemN>"
+		pr_echo "Usage: ${FUNCNAME} <val> <item1...itemN>"
 		exit 1
 	}
 
@@ -83,7 +83,7 @@ function acme_has() {
 function acme_split_keytype() {
 	local keytype="${1}"
 	[[ -n "${keytype}" ]] || {
-		pr_error "Usage: $0 <keytype>"
+		pr_error "Usage: ${FUNCNAME} <keytype>"
 		return 1
 	}
 
@@ -122,7 +122,7 @@ function acme_split_keytype() {
 function acme_get_csr_names() {
 	local csrfile="${1}"
 	[[ -f "${csrfile}" ]] || {
-		pr_echo "Usage: $0 <csr-file>"
+		pr_echo "Usage: ${FUNCNAME} <csr-file>"
 		exit 1
 	}
 
@@ -162,7 +162,7 @@ function acme_get_csr_names() {
 function acme_get_issuer_cert_url() {
 	local crtfile="${1}"
 	[[ -n "${crtfile}" ]] || {
-		pr_error "Usage: $0 <certficiate-file>"
+		pr_error "Usage: ${FUNCNAME} <certficiate-file>"
 		return 1
 	}
 
@@ -179,7 +179,7 @@ function acme_get_issuer_cert_url() {
 function acme_get_issuer_cert() {
 	local crtfile="${1}"
 	[[ -n "${crtfile}" ]] || {
-		pr_error "Usage: $0 <certficiate-file>"
+		pr_error "Usage: ${FUNCNAME} <certficiate-file>"
 		return 1
 	}
 
@@ -199,7 +199,7 @@ function acme_get_issuer_cert() {
 function acme_check_domain_cert() {
 	local crtfile="${1}"
 	[[ -n "${crtfile}" ]] || {
-		pr_error "Usage: $0 <certificate-file>"
+		pr_error "Usage: ${FUNCNAME} <certificate-file>"
 		return 1
 	}
 
@@ -247,7 +247,7 @@ function acme_handle_domain_cert() {
 	local csrfile="${1}"
 	local outfile="${2}"
 	[[ -n "${csrfile}" && -n "${outfile}" ]] || {
-		pr_error "Usage: $0 <sign-request-file> <certificate-file>"
+		pr_error "Usage: ${FUNCNAME} <sign-request-file> <certificate-file>"
 		return 1
 	}
 	[[ -f "${csrfile}" ]] || {
@@ -290,7 +290,7 @@ function acme_handle_issuer_cert() {
 	local crtfile="${1}"
 	local outfile="${2}"
 	[[ -n "${crtfile}" && -n "${outfile}" ]] || {
-		pr_error "Usage: $0 <certficiate-file> <issuer-cert-file>"
+		pr_error "Usage: ${FUNCNAME} <certficiate-file> <issuer-cert-file>"
 		return 1
 	}
 
