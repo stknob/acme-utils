@@ -189,6 +189,7 @@ then
 	fi
 fi
 
+UPDATED=0 SKIPPED=0 FAILED=0
 RENEWED_DOMAINS=()
 RENEWED_CERTS=()
 for fn in ${CERTIFICATES[@]}
@@ -265,4 +266,5 @@ then
 fi
 
 # Set proper exit code
-exit [[ ${FAILED} -eq 0 ]]
+[[ ${FAILED} -eq 0 ]]
+exit $?
