@@ -258,7 +258,7 @@ then
 
 	while read fn; do
 		[[ -x "${fn}" ]] || continue
-		(env - CERTS_RENEWED="${RENEWED_CERTS[@]}" DOMAINS_RENEWED="${RENEWED_DOMAINS[@]}" "${fn}") || {
+		(env - CERTS_RENEWED="${RENEWED_CERTS[*]}" DOMAINS_RENEWED="${RENEWED_DOMAINS[*]}" "${fn}") || {
 			pr_error "Failed to execute post hook script '${fn}'"
 			exit 1
 		}
