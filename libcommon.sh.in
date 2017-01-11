@@ -9,7 +9,7 @@ OPENSSL="@OPENSSL@"
 PWGEN="@PWGEN@"
 WGET="@WGET@"
 DIG="@DIG@"
-SU="@SU@"
+SUDO="@SUDO@"
 
 # Dedicated user and group for fetch/renew remote operations
 ACME_USER="acme"
@@ -63,7 +63,7 @@ function pr_fatal() {
 }
 
 function acme_secure_exec() {
-	su "${ACME_USER}" -- ${@}
+	"${SUDO}" -u "${ACME_USER}" -- ${@}
 	return $?
 }
 

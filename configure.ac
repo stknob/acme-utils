@@ -43,8 +43,8 @@ AS_IF([test "x${PWGEN}" = "x"], [AC_MSG_ERROR([pwgen not found])])
 AC_PATH_PROG([DIG], [dig])
 AS_IF([test "x${DIG}" = "x"], [AC_MSG_ERROR([dig not found])])
 
-AC_PATH_PROG([SU], [su])
-AS_IF([test "x${SU}" = "x"], [AC_MSG_ERROR([su not found])])
+AC_PATH_PROG([SUDO], [sudo])
+AS_IF([test "x${SUDO}" = "x"], [AC_MSG_ERROR([sudo not found])])
 
 # Generate output files
 AC_CONFIG_FILES([Makefile])
