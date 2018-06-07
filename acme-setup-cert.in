@@ -280,13 +280,18 @@ then
 
 	SIGNATURE="$(cat /proc/sys/kernel/random/uuid)"
 	[[ -n "${SIGNATURE}" ]] || {
-		pr_error "Failed to update '${CHECKFILE}', aborting"
+		pr_error "Failed to generate random value for '${CHECKFILE}', aborting"
 		exit 1
 	}
 
 	CHECK_TEMPFILE="$(mktemp -p "${CHALLENGE_DIR}")"
 	[[ $? -eq 0 && -f "${CHECK_TEMPFILE}" ]] || {
 		pr_error "Failed to create temporary check file, aborting"
+		exit 1
+	}
+
+	echo "${SIGNATURE}" > "${CHECK_TEMPFILE}" || {
+		pr_error "Failed to update temporary check file, aborting"
 		exit 1
 	}
 
