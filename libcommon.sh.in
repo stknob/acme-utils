@@ -233,7 +233,7 @@ function acme_check_domain_cert() {
 		return 0
 	}
 
-	grep -q "/C=US/O=Let's Encrypt/CN=Let's Encrypt Authority" <<<"${ISSUER}" || {
+	grep -q "/C=US/O=Let's Encrypt/CN=" <<<"${ISSUER}" || {
 		#pr_info "Certificate '${CERT_NAME}' not signed by letsencrypt CA, skipping"
 		return 1
 	}
